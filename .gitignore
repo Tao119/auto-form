@@ -1,0 +1,47 @@
+# Environment variables (contains API keys and secrets)
+.env
+web/.env.local
+**/.env.local
+
+# Service account and OAuth credentials (contain sensitive keys)
+config/service-account.json
+config/oauth2-credentials.json
+config/oauth2-token.json
+
+# Runtime data
+web/data/
+logs/
+*.log
+
+# Development screenshots and temp files
+*.png
+*.jpg
+.playwright-mcp/
+/tmp/
+
+# Node.js
+node_modules/
+web/node_modules/
+playwright-service/node_modules/
+src/node_modules/
+
+# Next.js
+web/.next/
+web/out/
+
+# Build artifacts
+web/tsconfig.tsbuildinfo
+web/.swc/
+
+# Docker
+.docker/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo

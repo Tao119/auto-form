@@ -1,0 +1,51 @@
+{
+  "_comment": "検索パラメータ設定。業種名を入力するだけでOK。エリアを「全国」にすると主要10都市を自動検索します。",
+  "runs": [
+    {
+      "id": "run-001",
+      "enabled": true,
+      "label": "美容室・全国",
+      "searchTargets": [
+        {
+          "industry": "美容室",
+          "area": "全国",
+          "keywords": ["美容室", "ヘアサロン", "美容院"],
+          "maxResults": 100
+        }
+      ]
+    }
+  ],
+  "areaExpansion": {
+    "全国": ["東京都", "大阪府", "神奈川県", "愛知県", "福岡県", "埼玉県", "千葉県", "北海道", "宮城県", "広島県"]
+  },
+  "formDetection": {
+    "contactPageKeywords": [
+      "お問い合わせ", "contact", "問い合わせ", "ご相談", "相談",
+      "メールフォーム", "メールでのお問い合わせ", "お気軽に",
+      "無料相談", "資料請求", "見積もり", "inquiry"
+    ],
+    "bookingPageKeywords": [
+      "予約", "ご予約", "reservation", "booking", "ネット予約",
+      "オンライン予約", "来店予約", "HOT PEPPER", "ホットペッパー",
+      "MINIMO", "楽天ビューティー", "エキテン"
+    ],
+    "formSelectors": [
+      "form", "input[type='text']", "input[type='email']", "textarea",
+      "[class*='contact']", "[class*='form']", "[id*='contact']", "[id*='form']"
+    ]
+  },
+  "sheetsColumns": {
+    "A": "会社名",
+    "B": "HP URL",
+    "C": "フォームURL",
+    "D": "電話番号",
+    "E": "メールアドレス",
+    "F": "住所",
+    "G": "業種",
+    "H": "エリア",
+    "I": "フォーム種別",
+    "J": "収集日時",
+    "K": "ステータス",
+    "L": "備考"
+  }
+}

@@ -1,0 +1,642 @@
+{
+  "name": "フォーム営業文章送信AI - Workflow 2: フォーム送信",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 10 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "trigger-schedule",
+      "name": "スケジュール実行（平日10時）",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        300
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "trigger-manual",
+      "name": "手動実行",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        200,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $vars.GOOGLE_SHEETS_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "企業リスト",
+          "mode": "name"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "ステータス",
+              "lookupValue": "未送信"
+            }
+          ]
+        },
+        "options": {
+          "returnFirstMatch": false
+        }
+      },
+      "id": "sheets-read-unsent",
+      "name": "F-01: 未送信リスト取得",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        420,
+        240
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-cred",
+          "name": "Google Sheets API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// F-12: レート制限 - 1バッチ最大3件に制限\nconst items = $input.all();\nconst batchSize = parseInt($vars.BATCH_SIZE || '3');\nconst batch = items.slice(0, batchSize);\nconsole.log(`処理対象: ${batch.length}件 / 全${items.length}件`);\nreturn batch;"
+      },
+      "id": "rate-limit",
+      "name": "F-12: レート制限（最大3件/回）",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        640,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json['HP URL'] }}",
+        "options": {
+          "timeout": 10000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": true,
+              "maxRedirects": 5
+            }
+          }
+        }
+      },
+      "id": "fetch-company-hp",
+      "name": "F-03: 企業HP取得",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        860,
+        240
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// F-03: HPからサービス情報を抽出\n// F-04: フォームURLを確認（スプシに既にある場合はそのまま使用）\nconst html = $input.item.json.data || '';\nconst prevData = $input.item.json;\n\n// テキスト抽出\nconst companyInfo = typeof html === 'string'\n  ? html\n      .replace(/<script[\\s\\S]*?<\\/script>/gi, '')\n      .replace(/<style[\\s\\S]*?<\\/style>/gi, '')\n      .replace(/<[^>]+>/g, ' ')\n      .replace(/\\s+/g, ' ')\n      .trim()\n      .slice(0, 1500)\n  : '';\n\nreturn [{\n  json: {\n    companyName: prevData['会社名'] || '',\n    companyUrl:  prevData['HP URL'] || '',\n    formUrl:     prevData['フォームURL'] || '',\n    phone:       prevData['電話番号'] || '',\n    industry:    prevData['業種'] || '',\n    area:        prevData['エリア'] || '',\n    rowIndex:    prevData['_rowIndex'] || 0,\n    companyInfo\n  }\n}];"
+      },
+      "id": "extract-company-info",
+      "name": "F-03: サービス情報抽出",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false
+          },
+          "conditions": [
+            {
+              "id": "has-form-url",
+              "leftValue": "={{ $json.formUrl }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "check-form-url",
+      "name": "フォームURL確認済み？",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1300,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "あなたは優秀な営業文章ライターです。企業のお問い合わせフォーム宛に送る営業文章を2パターン作成してください。\n\n【SHORT】400〜500字：フォームの文字制限対応版\n【LONG】2500〜3000字：詳細提案版\n\n書き出しは「はじめまして」または企業名から。押し売り感なく、相手の課題への共感から入ること。差出人は株式会社REMEDY。\n\nJSON形式で返答: {\"short\":\"...\",\"long\":\"...\"}"
+            },
+            {
+              "role": "user",
+              "content": "宛先企業: {{ $json.companyName }}\n業種: {{ $json.industry }}\n企業HP情報（抜粋）:\n{{ $json.companyInfo.slice(0, 800) }}\n\n株式会社REMEDYのサービス: AIを活用した集客・業務効率化支援。御社の{{ $json.industry }}業界での課題解決を支援できます。"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {}
+      },
+      "id": "gpt-generate-message",
+      "name": "F-05/06: 営業文章生成（500字/3000字）",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1520,
+        180
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-cred",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "set-short",
+              "name": "messageShort",
+              "value": "={{ $json.message?.short || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "set-long",
+              "name": "messageLong",
+              "value": "={{ $json.message?.long  || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "set-form",
+              "name": "formUrl",
+              "value": "={{ $('F-03: サービス情報抽出').item.json.formUrl }}",
+              "type": "string"
+            },
+            {
+              "id": "set-name",
+              "name": "companyName",
+              "value": "={{ $('F-03: サービス情報抽出').item.json.companyName }}",
+              "type": "string"
+            },
+            {
+              "id": "set-idx",
+              "name": "rowIndex",
+              "value": "={{ $('F-03: サービス情報抽出').item.json.rowIndex }}",
+              "type": "number"
+            }
+          ]
+        }
+      },
+      "id": "merge-data",
+      "name": "データ統合",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1740,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=http://playwright-service:3001/check-form",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ url: $json.formUrl }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "check-form-type",
+      "name": "F-10: 予約フォーム除外チェック",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1960,
+        180
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "not-booking",
+              "leftValue": "={{ $json.type }}",
+              "rightValue": "booking",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "filter-booking",
+      "name": "予約フォームを除外",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2180,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=http://playwright-service:3001/submit-form",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({\n  formUrl: $('データ統合').item.json.formUrl,\n  companyName: $('データ統合').item.json.companyName,\n  message: $('データ統合').item.json.messageShort,\n  senderName: $vars.SENDER_NAME || '株式会社REMEDY',\n  senderEmail: $vars.SENDER_EMAIL || '',\n  senderCompany: $vars.SENDER_COMPANY || '株式会社REMEDY'\n}) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "playwright-submit",
+      "name": "F-07: Playwrightフォーム送信",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2400,
+        120
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// F-08: スクショをGoogle Drive APIで保存\n// Base64データをDrive APIに直接アップロード\n\nconst result = $input.item.json;\nconst companyName = $('データ統合').item.json.companyName;\nconst folderId = $vars.GOOGLE_DRIVE_FOLDER_ID || '';\n\nif (!result.screenshotBase64) {\n  return [{ json: { ...result, driveFileUrl: null, companyName } }];\n}\n\n// Drive APIへのアップロードはGoogle Driveノードで行うため\n// Base64データを次のノードに渡す\nreturn [{\n  json: {\n    success: result.success,\n    screenshotBase64: result.screenshotBase64,\n    submittedAt: result.submittedAt,\n    error: result.error,\n    companyName,\n    folderId\n  }\n}];"
+      },
+      "id": "prepare-screenshot",
+      "name": "スクショデータ準備",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2620,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "name": "={{ $json.companyName.replace(/[\\\\/:*?\"<>|]/g, '_') + '_' + new Date().toISOString().slice(0,10) + '.png' }}",
+        "driveId": {
+          "__rl": true,
+          "value": "My Drive",
+          "mode": "list"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $vars.GOOGLE_DRIVE_FOLDER_ID || 'root' }}",
+          "mode": "id"
+        },
+        "binaryPropertyName": "screenshot",
+        "options": {}
+      },
+      "id": "drive-upload",
+      "name": "F-08: Drive スクショ保存",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        2840,
+        120
+      ],
+      "continueOnFail": true,
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "google-drive-cred",
+          "name": "Google Drive API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $vars.GOOGLE_SHEETS_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "企業リスト",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "HP URL": "={{ $('データ統合').item.json.formUrl.split('/').slice(0,3).join('/') }}",
+            "ステータス": "={{ $('F-07: Playwrightフォーム送信').item.json.success ? '送信済み' : '送信失敗' }}",
+            "収集日時": "={{ new Date().toLocaleString('ja-JP', {timeZone:'Asia/Tokyo'}) }}",
+            "備考": "={{ $('F-07: Playwrightフォーム送信').item.json.error || '' }}"
+          },
+          "matchingColumns": [
+            "HP URL"
+          ],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "sheets-update-status",
+      "name": "F-09: スプシ送信結果記録",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        3060,
+        120
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-cred",
+          "name": "Google Sheets API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "is-failed",
+              "leftValue": "={{ $('F-07: Playwrightフォーム送信').item.json.success }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-failed",
+      "name": "送信失敗？",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3060,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $vars.SLACK_WEBHOOK_URL }}",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({\n  text: `❌ フォーム送信失敗\\n会社名: ${$('データ統合').item.json.companyName}\\nURL: ${$('データ統合').item.json.formUrl}\\nエラー: ${$('F-07: Playwrightフォーム送信').item.json.error || '不明'}`,\n  username: 'フォーム送信AI'\n}) }}",
+        "options": {}
+      },
+      "id": "slack-notify",
+      "name": "F-11: Slack エラー通知",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3280,
+        300
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "unit": "seconds",
+        "value": 90
+      },
+      "id": "wait-between",
+      "name": "F-12: 送信間隔（90秒）",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2400,
+        320
+      ]
+    }
+  ],
+  "connections": {
+    "スケジュール実行（平日10時）": {
+      "main": [
+        [
+          {
+            "node": "F-01: 未送信リスト取得",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "手動実行": {
+      "main": [
+        [
+          {
+            "node": "F-01: 未送信リスト取得",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "F-01: 未送信リスト取得": {
+      "main": [
+        [
+          {
+            "node": "F-12: レート制限（最大3件/回）",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "F-12: レート制限（最大3件/回）": {
+      "main": [
+        [
+          {
+            "node": "F-03: 企業HP取得",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "F-03: 企業HP取得": {
+      "main": [
+        [
+          {
+            "node": "F-03: サービス情報抽出",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "F-03: サービス情報抽出": {
+      "main": [
+        [
+          {
+            "node": "フォームURL確認済み？",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "フォームURL確認済み？": {
+      "main": [
+        [
+          {
+            "node": "F-05/06: 営業文章生成（500字/3000字）",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "F-05/06: 営業文章生成（500字/3000字）": {
+      "main": [
+        [
+          {
+            "node": "データ統合",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "データ統合": {
+      "main": [
+        [
+          {
+            "node": "F-10: 予約フォーム除外チェック",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "F-10: 予約フォーム除外チェック": {
+      "main": [
+        [
+          {
+            "node": "予約フォームを除外",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "予約フォームを除外": {
+      "main": [
+        [
+          {
+            "node": "F-07: Playwrightフォーム送信",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "F-12: 送信間隔（90秒）",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "F-07: Playwrightフォーム送信": {
+      "main": [
+        [
+          {
+            "node": "スクショデータ準備",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "スクショデータ準備": {
+      "main": [
+        [
+          {
+            "node": "F-08: Drive スクショ保存",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "F-08: Drive スクショ保存": {
+      "main": [
+        [
+          {
+            "node": "F-09: スプシ送信結果記録",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "送信失敗？",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "送信失敗？": {
+      "main": [
+        [
+          {
+            "node": "F-11: Slack エラー通知",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "timezone": "Asia/Tokyo",
+    "errorWorkflow": ""
+  },
+  "tags": [
+    {
+      "name": "フォーム送信"
+    }
+  ],
+  "id": "d9363ef4-b18e-42a2-aef6-fb0c744d9b41"
+}

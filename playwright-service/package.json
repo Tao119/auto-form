@@ -1,0 +1,16 @@
+{
+  "name": "playwright-form-service",
+  "version": "1.0.0",
+  "description": "フォーム自動送信・スクショ取得 REST API（n8nから呼び出す）",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "install-browsers": "npx playwright install chromium"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "playwright": "^1.50.1"
+  }
+}

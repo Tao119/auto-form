@@ -1,0 +1,92 @@
+version: '3.8'
+
+# ===============================================
+# フォーム営業文章送信AI - 全サービス一括起動
+# 起動: docker compose up -d
+# 停止: docker compose down
+# ===============================================
+
+services:
+
+  # n8n ワークフローエンジン
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: form-ai-n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://localhost:5678/
+      - GENERIC_TIMEZONE=Asia/Tokyo
+      - TZ=Asia/Tokyo
+      # n8n Variables（ワークフロー内で $vars.XXX で参照）
+      - N8N_VARIABLES_INCLUDE_IN_PAYLOAD=true
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      # Callback URL so n8n can notify the web service on completion
+      - WEB_CALLBACK_URL=http://web:3000
+    env_file:
+      - .env
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n:/home/node/.n8n/workflows-import   # ワークフローJSONの自動インポート用
+      - ./config:/home/node/config:ro
+    depends_on:
+      - playwright-service
+    networks:
+      - form-ai-net
+
+  # Playwright フォーム送信サービス
+  playwright-service:
+    build:
+      context: ./playwright-service
+      dockerfile: Dockerfile
+    container_name: form-ai-playwright
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    environment:
+      - PLAYWRIGHT_SERVICE_PORT=3002
+      - SENDER_NAME=${SENDER_NAME:-株式会社REMEDY}
+      - SENDER_EMAIL=${SENDER_EMAIL:-}
+      - SENDER_COMPANY=${SENDER_COMPANY:-株式会社REMEDY}
+    networks:
+      - form-ai-net
+
+  # Next.js Web UI
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: form-ai-web
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - N8N_BASE_URL=http://n8n:5678
+      - N8N_API_KEY=${N8N_API_KEY}
+      - N8N_WORKFLOW_ID=${N8N_WORKFLOW_ID}
+      - N8N_WEBHOOK_PATH=list-collect
+      - GOOGLE_SHEETS_ID=${GOOGLE_SHEETS_ID}
+      - CONFIG_DIR=/app/config
+      # Queue concurrency (default 3 simultaneous runs)
+      - MAX_CONCURRENT_RUNS=${MAX_CONCURRENT_RUNS:-3}
+      # Internal URL used by queue/complete to trigger next job
+      - INTERNAL_BASE_URL=http://web:3000
+    volumes:
+      - ./config:/app/config:ro
+    depends_on:
+      - n8n
+    networks:
+      - form-ai-net
+
+volumes:
+  n8n_data:
+    driver: local
+
+networks:
+  form-ai-net:
+    driver: bridge

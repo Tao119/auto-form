@@ -1,0 +1,33 @@
+{
+  "name": "auto-form-list-collector",
+  "version": "1.0.0",
+  "description": "企業リスト自動収集システム - n8n + Cheerio + GPT + Google Sheets",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test src/**/*.test.js",
+    "collect": "node src/index.js --mode=collect",
+    "auth": "node scripts/auth-oauth2.js",
+    "init-sheets": "node scripts/init-sheets.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "cheerio": "^1.0.0",
+    "dotenv": "^16.4.7",
+    "express": "^5.2.1",
+    "googleapis": "^144.0.0",
+    "openai": "^4.77.0",
+    "p-limit": "^6.2.0",
+    "p-retry": "^6.2.1",
+    "user-agents": "^1.1.426",
+    "winston": "^3.17.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.10"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

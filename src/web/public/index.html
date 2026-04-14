@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>リスト収集AI 管理画面</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f0f2f5; color: #1a1a2e; min-height: 100vh; }
+
+  header { background: #16213e; color: #fff; padding: 16px 24px; display: flex; align-items: center; gap: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.3); }
+  header h1 { font-size: 18px; font-weight: 600; }
+  .badge { background: #0f3460; color: #e94560; font-size: 11px; padding: 3px 8px; border-radius: 4px; font-weight: 700; letter-spacing: .5px; }
+
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px; display: grid; gap: 24px; }
+
+  .card { background: #fff; border-radius: 12px; box-shadow: 0 1px 4px rgba(0,0,0,.08); overflow: hidden; }
+  .card-header { padding: 16px 20px; border-bottom: 1px solid #f0f2f5; display: flex; align-items: center; justify-content: space-between; }
+  .card-header h2 { font-size: 15px; font-weight: 600; }
+  .card-body { padding: 20px; }
+
+  /* Runs Table */
+  .runs-table { width: 100%; border-collapse: collapse; }
+  .runs-table th { text-align: left; font-size: 12px; color: #888; padding: 0 12px 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; }
+  .runs-table td { padding: 10px 12px; border-top: 1px solid #f5f5f5; font-size: 14px; vertical-align: middle; }
+  .runs-table tr:hover td { background: #fafbff; }
+  .tag { display: inline-block; padding: 3px 8px; border-radius: 20px; font-size: 12px; font-weight: 500; }
+  .tag-enabled { background: #e6f9f0; color: #1a9e60; }
+  .tag-disabled { background: #f5f5f5; color: #999; }
+  .keywords-list { font-size: 12px; color: #666; }
+
+  /* Buttons */
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; border: none; transition: .15s; }
+  .btn-primary { background: #0f3460; color: #fff; }
+  .btn-primary:hover { background: #16213e; }
+  .btn-success { background: #1a9e60; color: #fff; }
+  .btn-success:hover { background: #148a52; }
+  .btn-danger { background: #e94560; color: #fff; }
+  .btn-danger:hover { background: #c73652; }
+  .btn-ghost { background: transparent; color: #666; border: 1px solid #e0e0e0; }
+  .btn-ghost:hover { background: #f5f5f5; }
+  .btn-sm { padding: 5px 10px; font-size: 12px; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* Form */
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 640px) { .form-grid { grid-template-columns: 1fr; } }
+  .form-group { display: flex; flex-direction: column; gap: 6px; }
+  .form-group.full { grid-column: 1 / -1; }
+  label { font-size: 13px; font-weight: 500; color: #444; }
+  select, input[type=text], input[type=number] {
+    padding: 9px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; outline: none; transition: border-color .15s;
+    width: 100%;
+  }
+  select:focus, input:focus { border-color: #0f3460; box-shadow: 0 0 0 3px rgba(15,52,96,.1); }
+  .help-text { font-size: 12px; color: #999; }
+
+  /* Log */
+  #log { background: #1a1a2e; color: #e0e0e0; border-radius: 8px; padding: 16px; height: 280px; overflow-y: auto; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; line-height: 1.7; }
+  #log .info { color: #7ec8e3; }
+  #log .err { color: #e94560; }
+  #log .warn { color: #f4c430; }
+
+  /* Collect status */
+  .status-bar { display: flex; align-items: center; gap: 12px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #ddd; flex-shrink: 0; }
+  .dot.running { background: #1a9e60; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .status-text { font-size: 13px; color: #666; }
+
+  .actions { display: flex; gap: 8px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>リスト収集AI</h1>
+  <span class="badge">REMEDY</span>
+</header>
+
+<main>
+
+  <!-- 収集ターゲット一覧 -->
+  <div class="card">
+    <div class="card-header">
+      <h2>収集ターゲット</h2>
+      <button class="btn btn-primary btn-sm" onclick="openAddForm()">+ 追加</button>
+    </div>
+    <div class="card-body" style="padding:0">
+      <table class="runs-table">
+        <thead>
+          <tr>
+            <th>ラベル</th>
+            <th>業種</th>
+            <th>エリア</th>
+            <th>キーワード</th>
+            <th>最大件数</th>
+            <th>状態</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="runs-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 追加フォーム -->
+  <div class="card" id="add-form-card" style="display:none">
+    <div class="card-header">
+      <h2>ターゲット追加</h2>
+      <button class="btn btn-ghost btn-sm" onclick="closeAddForm()">✕ キャンセル</button>
+    </div>
+    <div class="card-body">
+      <div class="form-grid">
+        <div class="form-group">
+          <label>業種 <span style="color:#e94560">*</span></label>
+          <select id="f-industry-select" onchange="onIndustryChange()">
+            <option value="">-- 選択 --</option>
+            <option value="ヘッドスパ">ヘッドスパ</option>
+            <option value="美容室">美容室 / ヘアサロン</option>
+            <option value="美容クリニック">美容クリニック</option>
+            <option value="リスキリングスクール">リスキリングスクール</option>
+            <option value="中古車販売">中古車販売</option>
+            <option value="YouTube運用代行">YouTube運用代行</option>
+            <option value="整体院">整体院 / 整骨院</option>
+            <option value="歯科医院">歯科医院</option>
+            <option value="税理士">税理士事務所</option>
+            <option value="other">その他（直接入力）</option>
+          </select>
+          <input type="text" id="f-industry-text" placeholder="業種名を入力" style="display:none;margin-top:6px">
+        </div>
+        <div class="form-group">
+          <label>エリア</label>
+          <select id="f-area-select" onchange="onAreaChange()">
+            <option value="東京都">東京都</option>
+            <option value="大阪府">大阪府</option>
+            <option value="神奈川県">神奈川県</option>
+            <option value="愛知県">愛知県</option>
+            <option value="福岡県">福岡県</option>
+            <option value="北海道">北海道</option>
+            <option value="宮城県">宮城県</option>
+            <option value="広島県">広島県</option>
+            <option value="other">その他（直接入力）</option>
+          </select>
+          <input type="text" id="f-area-text" placeholder="エリアを入力" style="display:none;margin-top:6px">
+        </div>
+        <div class="form-group full">
+          <label>キーワード（カンマ区切り）</label>
+          <input type="text" id="f-keywords" placeholder="例: ヘッドスパ, 頭皮ケア, ヘッドマッサージ">
+          <span class="help-text">空白の場合は業種名が自動設定されます</span>
+        </div>
+        <div class="form-group">
+          <label>最大件数</label>
+          <input type="number" id="f-max" value="50" min="10" max="200">
+        </div>
+        <div class="form-group">
+          <label>ラベル（任意）</label>
+          <input type="text" id="f-label" placeholder="例: 東京・ヘッドスパ">
+        </div>
+      </div>
+      <div style="margin-top:20px;display:flex;gap:10px">
+        <button class="btn btn-primary" onclick="addRun()">追加</button>
+        <button class="btn btn-ghost" onclick="closeAddForm()">キャンセル</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 収集実行 -->
+  <div class="card">
+    <div class="card-header">
+      <h2>収集実行</h2>
+      <div class="status-bar">
+        <div class="dot" id="status-dot"></div>
+        <span class="status-text" id="status-text">待機中</span>
+      </div>
+    </div>
+    <div class="card-body">
+      <div style="display:flex;gap:10px;margin-bottom:16px">
+        <button class="btn btn-success" id="btn-start" onclick="startCollect()">▶ 収集開始</button>
+        <button class="btn btn-danger" id="btn-stop" onclick="stopCollect()" disabled>■ 停止</button>
+      </div>
+      <div id="log"><span style="color:#555">収集ログがここに表示されます</span></div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+let config = null
+let logPoll = null
+
+// ===== 初期ロード =====
+async function loadConfig() {
+  const res = await fetch('/api/config')
+  config = await res.json()
+  renderRuns()
+}
+
+function renderRuns() {
+  const tbody = document.getElementById('runs-tbody')
+  tbody.innerHTML = ''
+  for (const run of config.runs) {
+    const t = run.searchTargets[0] || {}
+    const tr = document.createElement('tr')
+    tr.innerHTML = `
+      <td>${run.label || run.id}</td>
+      <td>${t.industry || '-'}</td>
+      <td>${t.area || '全国'}</td>
+      <td class="keywords-list">${(t.keywords || []).slice(0,3).join(', ')}</td>
+      <td>${t.maxResults || 50}</td>
+      <td><span class="tag ${run.enabled ? 'tag-enabled' : 'tag-disabled'}">${run.enabled ? '有効' : '無効'}</span></td>
+      <td>
+        <div class="actions">
+          <button class="btn btn-ghost btn-sm" onclick="toggleRun('${run.id}')">${run.enabled ? '無効化' : '有効化'}</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteRun('${run.id}')">削除</button>
+        </div>
+      </td>
+    `
+    tbody.appendChild(tr)
+  }
+}
+
+// ===== Run CRUD =====
+async function toggleRun(id) {
+  await fetch(`/api/runs/${id}/toggle`, { method: 'PATCH' })
+  await loadConfig()
+}
+
+async function deleteRun(id) {
+  if (!confirm('このターゲットを削除しますか？')) return
+  await fetch(`/api/runs/${id}`, { method: 'DELETE' })
+  await loadConfig()
+}
+
+function openAddForm() {
+  document.getElementById('add-form-card').style.display = 'block'
+  document.getElementById('add-form-card').scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+function closeAddForm() {
+  document.getElementById('add-form-card').style.display = 'none'
+}
+
+function onIndustryChange() {
+  const sel = document.getElementById('f-industry-select')
+  const txt = document.getElementById('f-industry-text')
+  txt.style.display = sel.value === 'other' ? 'block' : 'none'
+  if (sel.value !== 'other' && sel.value) {
+    // キーワードを自動補完
+    const presets = {
+      'ヘッドスパ': 'ヘッドスパ, 頭皮ケア, ヘッドマッサージ専門店',
+      '美容室': '美容室, ヘアサロン, 美容院',
+      '美容クリニック': '美容クリニック, 美容外科, 美容皮膚科, 医療脱毛',
+      'リスキリングスクール': 'リスキリング, プログラミングスクール, AIスクール, 社会人向けスクール',
+      '中古車販売': '中古車販売, 中古車買取, カーディーラー',
+      'YouTube運用代行': 'YouTube運用代行, 動画マーケティング, YouTubeチャンネル運用',
+      '整体院': '整体院, 整骨院, 接骨院, カイロプラクティック',
+      '歯科医院': '歯科医院, 歯科クリニック, 歯医者',
+      '税理士': '税理士事務所, 会計事務所',
+    }
+    if (presets[sel.value]) {
+      document.getElementById('f-keywords').value = presets[sel.value]
+    }
+    // ラベル自動補完
+    const area = getArea()
+    document.getElementById('f-label').value = area ? `${area}・${sel.value}` : sel.value
+  }
+}
+
+function onAreaChange() {
+  const sel = document.getElementById('f-area-select')
+  const txt = document.getElementById('f-area-text')
+  txt.style.display = sel.value === 'other' ? 'block' : 'none'
+  // ラベル再補完
+  const industry = getIndustry()
+  if (industry) {
+    const area = getArea()
+    document.getElementById('f-label').value = area ? `${area}・${industry}` : industry
+  }
+}
+
+function getIndustry() {
+  const sel = document.getElementById('f-industry-select')
+  if (sel.value === 'other') return document.getElementById('f-industry-text').value.trim()
+  return sel.value
+}
+
+function getArea() {
+  const sel = document.getElementById('f-area-select')
+  if (sel.value === 'other') return document.getElementById('f-area-text').value.trim()
+  return sel.value
+}
+
+async function addRun() {
+  const industry = getIndustry()
+  if (!industry) { alert('業種を入力してください'); return }
+
+  const area = getArea()
+  const keywordsRaw = document.getElementById('f-keywords').value.trim()
+  const keywords = keywordsRaw
+    ? keywordsRaw.split(',').map(k => k.trim()).filter(Boolean)
+    : [industry]
+  const maxResults = parseInt(document.getElementById('f-max').value) || 50
+  const label = document.getElementById('f-label').value.trim() || `${area}・${industry}`
+
+  const run = {
+    enabled: true,
+    label,
+    searchTargets: [{ industry, area, keywords, maxResults }]
+  }
+
+  const res = await fetch('/api/runs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(run)
+  })
+  if (res.ok) {
+    closeAddForm()
+    await loadConfig()
+  } else {
+    alert('エラーが発生しました')
+  }
+}
+
+// ===== 収集実行 =====
+async function startCollect() {
+  const res = await fetch('/api/collect/start', { method: 'POST' })
+  if (!res.ok) {
+    const e = await res.json()
+    alert(e.error)
+    return
+  }
+  document.getElementById('btn-start').disabled = true
+  document.getElementById('btn-stop').disabled = false
+  document.getElementById('status-dot').className = 'dot running'
+  document.getElementById('status-text').textContent = '収集中...'
+  document.getElementById('log').innerHTML = ''
+  startLogPoll()
+}
+
+async function stopCollect() {
+  await fetch('/api/collect/stop', { method: 'POST' })
+  stopLogPoll()
+  document.getElementById('btn-start').disabled = false
+  document.getElementById('btn-stop').disabled = true
+  document.getElementById('status-dot').className = 'dot'
+  document.getElementById('status-text').textContent = '停止'
+}
+
+function startLogPoll() {
+  logPoll = setInterval(pollStatus, 1000)
+}
+function stopLogPoll() {
+  if (logPoll) { clearInterval(logPoll); logPoll = null }
+}
+
+async function pollStatus() {
+  const res = await fetch('/api/collect/status')
+  const data = await res.json()
+
+  const el = document.getElementById('log')
+  el.innerHTML = data.log.map(l => {
+    const cls = l.msg.includes('[ERR]') ? 'err' : l.msg.includes('WARN') ? 'warn' : 'info'
+    return `<div class="${cls}">${escHtml(l.msg)}</div>`
+  }).join('')
+  el.scrollTop = el.scrollHeight
+
+  if (!data.running) {
+    stopLogPoll()
+    document.getElementById('btn-start').disabled = false
+    document.getElementById('btn-stop').disabled = true
+    document.getElementById('status-dot').className = 'dot'
+    document.getElementById('status-text').textContent = '完了'
+  }
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+}
+
+loadConfig()
+</script>
+</body>
+</html>
