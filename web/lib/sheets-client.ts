@@ -82,12 +82,12 @@ export async function getSheetDataAsCSV(rows?: CompanyRow[]): Promise<string> {
 }
 
 export async function getSheetStats(projectId?: string): Promise<{ total: number; byStatus: Record<string, number> }> {
-  const allRows = await getSheetData()
-  const rows = projectId ? allRows.filter((r) => r['プロジェクトID'] === projectId) : allRows
+  const { getCompanies } = await import('./companies-db')
+  const companies = getCompanies(projectId ? { projectId } : undefined)
   const byStatus: Record<string, number> = {}
-  for (const row of rows) {
-    const s = row['ステータス'] || '不明'
+  for (const c of companies) {
+    const s = c.status || '不明'
     byStatus[s] = (byStatus[s] || 0) + 1
   }
-  return { total: rows.length, byStatus }
+  return { total: companies.length, byStatus }
 }

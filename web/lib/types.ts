@@ -48,6 +48,21 @@ export interface Preset {
   searchTarget: SearchTarget
 }
 
+// ─── Benchmark results ────────────────────────────────────────
+
+export interface BenchmarkResults {
+  totalCompanies: number      // L-02 Google Places total
+  afterDedup: number          // after removing duplicates (already scraped)
+  successCount: number        // HP fetch success
+  errorCount: number          // HP fetch error
+  formFoundCount: number      // companies with contact form detected
+  formFoundRate: number       // formFoundCount / afterDedup * 100 (integer %)
+  itemsWritten: number        // new rows written to Sheets (dedup against existing)
+  elapsedMs: number           // total elapsed time
+  avgMsPerItem: number        // elapsedMs / afterDedup
+  subAreaCount?: number       // number of sub-areas searched
+}
+
 // ─── Project types ────────────────────────────────────────────
 
 export interface Project {
@@ -66,7 +81,7 @@ export interface ProjectRun {
   completedAt?: string
   searchTarget: SearchTarget
   n8nExecutionId?: string
-  status: 'pending' | 'running' | 'success' | 'error'
+  status: 'pending' | 'running' | 'success' | 'completed' | 'error'
   itemsWritten?: number
   // Token / cost tracking
   tokensInput?: number
@@ -74,6 +89,7 @@ export interface ProjectRun {
   estimatedCostUsd?: number
   // Accuracy stats: Places API hit count vs final written count
   rawSearchCount?: number   // total places found by Google Places (before filtering)
+  results?: BenchmarkResults
   // Queue
   queuePosition?: number  // 1-based position in waiting queue; undefined = not queued
 }

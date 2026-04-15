@@ -103,6 +103,7 @@ export interface RunStatusUpdate {
   estimatedCostUsd?: number
   completedAt?: string
   rawSearchCount?: number
+  results?: import('./types').BenchmarkResults
 }
 
 export function updateRunStatus(
@@ -123,5 +124,6 @@ export function updateRunStatus(
   if (extra?.estimatedCostUsd !== undefined) run.estimatedCostUsd = extra.estimatedCostUsd
   if (extra?.completedAt !== undefined) run.completedAt = extra.completedAt
   if (extra?.rawSearchCount !== undefined) run.rawSearchCount = extra.rawSearchCount
+  if (extra?.results !== undefined) run.results = extra.results
   writeData(data)
 }

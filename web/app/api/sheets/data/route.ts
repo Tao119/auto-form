@@ -1,6 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getSheetData, getSheetDataByProject, getSheetDataByRun } from '@/lib/sheets-client'
+import { getCompanies } from '@/lib/companies-db'
+import type { Company } from '@/lib/companies-db'
 import type { CompanyRow } from '@/lib/types'
+
+function toRow(c: Company): CompanyRow {
+  return {
+    '会社名': c.name,
+    'HP URL': c.hpUrl,
+    'フォームURL': c.formUrl,
+    '電話番号': c.phone,
+    'メールアドレス': c.email,
+    '住所': c.address,
+    '業種': c.industry,
+    'エリア': c.area,
+    'フォーム種別': c.formType,
+    '収集日時': c.collectedAt,
+    'ステータス': c.status,
+    '備考': c.notes,
+    'プロジェクトID': c.projectId,
+    '実行ID': c.runId,
+  }
+}
 
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl
@@ -14,15 +34,12 @@ export async function GET(req: NextRequest) {
   const runId = searchParams.get('runId') || ''
 
   try {
-    let rows: CompanyRow[]
+    const companies = getCompanies({
+      projectId: projectId || undefined,
+      runId: runId || undefined,
+    })
 
-    if (runId) {
-      rows = await getSheetDataByRun(runId)
-    } else if (projectId) {
-      rows = await getSheetDataByProject(projectId)
-    } else {
-      rows = await getSheetData()
-    }
+    let rows: CompanyRow[] = companies.map(toRow)
 
     if (filterIndustry) rows = rows.filter((r) => r['業種'].includes(filterIndustry))
     if (filterArea) rows = rows.filter((r) => r['エリア'].includes(filterArea))
@@ -40,7 +57,7 @@ export async function GET(req: NextRequest) {
     const start = (page - 1) * limit
     const data = rows.slice(start, start + limit)
 
-    const allForFilters = projectId ? await getSheetDataByProject(projectId) : await getSheetData()
+    const allForFilters = getCompanies({ projectId: projectId || undefined }).map(toRow)
     const industries = [...new Set(allForFilters.map((r) => r['業種']).filter(Boolean))].sort()
     const areas = [...new Set(allForFilters.map((r) => r['エリア']).filter(Boolean))].sort()
 

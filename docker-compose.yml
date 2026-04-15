@@ -26,7 +26,14 @@ services:
       - N8N_VARIABLES_INCLUDE_IN_PAYLOAD=true
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
       # Callback URL so n8n can notify the web service on completion
-      - WEB_CALLBACK_URL=http://web:3000
+      # host.docker.internal:3003 = Next.js dev server running on host machine
+      - WEB_CALLBACK_URL=http://host.docker.internal:3003
+      # Save execution data for debugging
+      - EXECUTIONS_DATA_SAVE_ON_SUCCESS=all
+      - EXECUTIONS_DATA_SAVE_ON_ERROR=all
+      - EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=true
+      # Disable task runner to avoid race condition on restart
+      - N8N_RUNNERS_ENABLED=false
     env_file:
       - .env
     volumes:

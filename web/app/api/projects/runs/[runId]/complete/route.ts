@@ -3,6 +3,21 @@ import { z } from 'zod'
 import { updateRunStatus } from '@/lib/project-manager'
 import { markJobDone } from '@/lib/run-queue'
 import { calcCostUsd } from '@/lib/n8n-sync'
+import { addCompanies } from '@/lib/companies-db'
+import type { CompanyInput } from '@/lib/companies-db'
+
+const ResultsSchema = z.object({
+  totalCompanies: z.number().int().min(0).optional(),
+  afterDedup: z.number().int().min(0).optional(),
+  successCount: z.number().int().min(0).optional(),
+  errorCount: z.number().int().min(0).optional(),
+  formFoundCount: z.number().int().min(0).optional(),
+  formFoundRate: z.number().int().min(0).optional(),
+  itemsWritten: z.number().int().min(0).optional(),
+  elapsedMs: z.number().int().min(0).optional(),
+  avgMsPerItem: z.number().int().min(0).optional(),
+  subAreaCount: z.number().int().min(0).optional(),
+}).optional()
 
 const Schema = z.object({
   status: z.enum(['success', 'error']),
@@ -11,6 +26,8 @@ const Schema = z.object({
   tokensOutput: z.number().int().min(0).optional(),
   model: z.string().optional(),
   error: z.string().optional(),
+  results: ResultsSchema,
+  companies: z.array(z.record(z.string(), z.unknown())).optional(),
 })
 
 /**
@@ -31,12 +48,20 @@ export async function POST(
         ? calcCostUsd(body.model ?? 'gpt-4o-mini', body.tokensInput, body.tokensOutput)
         : undefined
 
-    updateRunStatus(runId, body.status, undefined, body.itemsWritten, {
+    const itemsWritten = body.itemsWritten ?? body.results?.itemsWritten
+
+    updateRunStatus(runId, body.status, undefined, itemsWritten, {
       tokensInput: body.tokensInput,
       tokensOutput: body.tokensOutput,
       estimatedCostUsd,
       completedAt: new Date().toISOString(),
+      results: body.results as any,
     })
+
+    // Save collected companies to local DB
+    if (body.companies?.length) {
+      addCompanies(body.companies as unknown as CompanyInput[])
+    }
 
     // Trigger next queued job
     const next = markJobDone(runId, body.status === 'success' ? 'completed' : 'failed', body.error)
