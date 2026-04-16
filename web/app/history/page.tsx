@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import {
   CheckCircle2, XCircle, Clock, AlertCircle, RefreshCw,
   FolderOpen, ChevronRight, Play, Database, Zap, DollarSign, ListOrdered,
-  Search, Filter,
+  Search, Filter, Trash2,
 } from 'lucide-react'
 import type { ProjectRun } from '@/lib/types'
 
@@ -92,6 +92,17 @@ export default function HistoryPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: 'error' }),
       })
+      await load()
+    } catch {
+      // silently ignore
+    }
+  }
+
+  const deleteRunEntry = async (run: RunWithProject) => {
+    const label = `「${run.label}」`
+    if (!confirm(`${label} を削除しますか？\n関連する収集データも全て削除されます。`)) return
+    try {
+      await fetch(`/api/projects/runs/${run.id}`, { method: 'DELETE' })
       await load()
     } catch {
       // silently ignore
@@ -382,19 +393,30 @@ export default function HistoryPage() {
                     {formatDuration(run.createdAt, run.completedAt)}
                   </td>
 
-                  {/* Link to results */}
+                  {/* Link to results + delete */}
                   <td className="px-4 py-3">
-                    {(run.status === 'success' || run.status === 'completed') && run.itemsWritten && run.itemsWritten > 0 ? (
-                      <button
-                        onClick={() => router.push(`/results/${run.projectId}`)}
-                        className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 transition-colors"
-                      >
-                        結果を見る
-                        <ChevronRight className="w-3 h-3" />
-                      </button>
-                    ) : (
-                      <span className="text-gray-300 text-xs">-</span>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {(run.status === 'success' || run.status === 'completed') && run.itemsWritten && run.itemsWritten > 0 ? (
+                        <button
+                          onClick={() => router.push(`/results/${run.projectId}`)}
+                          className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 transition-colors"
+                        >
+                          結果を見る
+                          <ChevronRight className="w-3 h-3" />
+                        </button>
+                      ) : (
+                        <span className="text-gray-300 text-xs">-</span>
+                      )}
+                      {(run.status === 'success' || run.status === 'completed' || run.status === 'error') && (
+                        <button
+                          onClick={() => deleteRunEntry(run)}
+                          className="p-1 text-gray-300 hover:text-red-500 transition-colors"
+                          title="このランを削除"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}

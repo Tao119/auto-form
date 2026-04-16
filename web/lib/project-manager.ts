@@ -71,6 +71,20 @@ export function deleteProject(id: string): void {
   writeData(data)
 }
 
+/** Remove a single run from its project. Returns the runId if found. */
+export function deleteRun(runId: string): string | null {
+  const data = readData()
+  const run = data.runs.find((r) => r.id === runId)
+  if (!run) return null
+  data.runs = data.runs.filter((r) => r.id !== runId)
+  const project = data.projects.find((p) => p.id === run.projectId)
+  if (project) {
+    project.runIds = project.runIds.filter((id) => id !== runId)
+  }
+  writeData(data)
+  return runId
+}
+
 // ─── Runs ──────────────────────────────────────────────────────
 
 export function getRunsForProject(projectId: string): ProjectRun[] {

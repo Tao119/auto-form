@@ -552,7 +552,10 @@ export default function ProjectResultsPage() {
                       )}
                     </td>
                     <td className="px-3 py-2.5 max-w-[180px]">
-                      <div className="font-medium text-gray-800 truncate" title={row['会社名']}>
+                      <div
+                        className="font-medium text-gray-800 truncate"
+                        title={[row['会社名'], row['住所']].filter(Boolean).join('\n')}
+                      >
                         {row['会社名'] || '-'}
                       </div>
                       {row['電話番号'] && (
