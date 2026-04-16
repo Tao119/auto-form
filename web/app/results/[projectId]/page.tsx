@@ -314,13 +314,13 @@ export default function ProjectResultsPage() {
   }, [selectedIds, fetchData, page])
 
   // S key: mark selected rows as 送信済み (handy after manually sending forms)
+  // X key: mark selected rows as スキップ (skip entries not suitable for outreach)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const inInput = document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA' || document.activeElement?.tagName === 'SELECT'
-      if (e.key === 's' && !e.metaKey && !e.ctrlKey && !e.shiftKey && !inInput && selectedIds.size > 0) {
-        e.preventDefault()
-        handleBatchStatusUpdate('送信済み')
-      }
+      if (inInput || e.metaKey || e.ctrlKey || e.shiftKey || selectedIds.size === 0) return
+      if (e.key === 's') { e.preventDefault(); handleBatchStatusUpdate('送信済み') }
+      if (e.key === 'x') { e.preventDefault(); handleBatchStatusUpdate('スキップ') }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
@@ -587,9 +587,10 @@ export default function ProjectResultsPage() {
               <button
                 onClick={() => handleBatchStatusUpdate('スキップ')}
                 disabled={batchUpdating}
+                title="X キーでも実行できます"
                 className="text-xs px-2 py-1 bg-yellow-600 hover:bg-yellow-700 disabled:bg-gray-300 text-white rounded transition-colors"
               >
-                スキップ
+                スキップ [X]
               </button>
               <button
                 onClick={() => handleBatchStatusUpdate('エラー')}
