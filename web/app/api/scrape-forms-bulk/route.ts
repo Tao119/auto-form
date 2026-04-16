@@ -104,6 +104,12 @@ const BOOKING_URL_HOSTS = [
   // Additional booking / scheduling services
   'squareup.com',
   'classpass.com','vagaro.com',
+  // Japanese beauty/salon booking platforms
+  'b.hpr.jp',           // ホットペッパービューティー サロンページ
+  'riyou.jp',           // 美容室予約サービス
+  'stekina.com',        // 美容師向け予約LP
+  'ekiten.jp',          // 店舗予約ポータル
+  'navitime.co.jp',     // 予約ナビ
 ]
 const EXTERNAL_FORM_HOSTS = [
   'docs.google.com','forms.gle',

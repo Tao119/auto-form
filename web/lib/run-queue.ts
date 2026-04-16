@@ -189,8 +189,33 @@ export function getQueueStatus(): {
     }
   }
 
+  // Auto-kick stuck queue: if active=0 but waiting>0, dispatch immediately.
+  // This handles server restart + stale recovery leaving waiting jobs un-dispatched.
+  const currentData = recovered > 0 ? readQueue() : data
+  const activeAfterRecovery = currentData.jobs.filter((j) => j.status === 'active').length
+  const waitingAfterRecovery = currentData.jobs.filter((j) => j.status === 'waiting')
+  if (activeAfterRecovery === 0 && waitingAfterRecovery.length > 0) {
+    const maxC = currentData.maxConcurrent || MAX_CONCURRENT
+    const toDispatch = waitingAfterRecovery
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+      .slice(0, maxC)
+    for (const job of toDispatch) {
+      job.status = 'active'
+      job.startedAt = new Date().toISOString()
+    }
+    writeQueue(currentData)
+    const base = process.env.INTERNAL_BASE_URL || 'http://localhost:3003'
+    for (const job of toDispatch) {
+      fetch(`${base}/api/queue/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runId: job.runId, params: job.params }),
+      }).catch(() => {})
+    }
+  }
+
   // Re-read for up-to-date counts (after any recovery writes)
-  const current = recovered > 0 ? readQueue() : data
+  const current = readQueue()
   const active = current.jobs.filter((j) => j.status === 'active').length
   const waiting = current.jobs.filter((j) => j.status === 'waiting').length
 
