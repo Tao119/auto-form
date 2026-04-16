@@ -101,14 +101,25 @@ export function markJobActive(runId: string): void {
   writeQueue(data)
 }
 
-/** Mark a job as completed or failed, and return the next waiting job (if any). */
+/** Mark a job as completed or failed, and return the next waiting job (if any).
+ *  Safe to call multiple times — only advances the queue if the job was previously 'active'. */
 export function markJobDone(runId: string, status: 'completed' | 'failed', error?: string): QueueJob | undefined {
   const data = readQueue()
   const job = data.jobs.find((j) => j.runId === runId)
+
+  // Guard: only advance the queue when we're actually completing an active job.
+  // Calling markJobDone on an already-done job (e.g. double-cancel) should be a no-op.
+  const wasActive = job?.status === 'active'
+
   if (job) {
     job.status = status
     job.completedAt = new Date().toISOString()
     if (error) job.error = error
+  }
+
+  if (!wasActive) {
+    writeQueue(data)
+    return undefined
   }
 
   // Only start next job if we're below the concurrency limit (prevents race condition)

@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation'
 import {
   ArrowLeft, Download, Search, RefreshCw, X,
   CheckCircle, XCircle, Clock, Play, FolderOpen, Copy, Check,
+  ChevronUp, ChevronDown, ChevronsUpDown,
 } from 'lucide-react'
 import type { CompanyRow, Project, ProjectRun } from '@/lib/types'
 
@@ -51,6 +52,8 @@ export default function ProjectResultsPage() {
   const [filters, setFilters] = useState<FilterState>({ industry: '', area: '', status: '', formType: '', hasForm: '', search: '' })
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [sortBy, setSortBy] = useState<string>('collectedAt')
+  const [sortDir, setSortDir] = useState<'ASC' | 'DESC'>('DESC')
   const [loading, setLoading] = useState(false)
   const [projLoading, setProjLoading] = useState(true)
   const [error, setError] = useState('')
@@ -101,12 +104,22 @@ export default function ProjectResultsPage() {
   }, [projectId])
 
 
+  const handleSort = useCallback((col: string) => {
+    if (sortBy === col) {
+      setSortDir((d) => (d === 'DESC' ? 'ASC' : 'DESC'))
+    } else {
+      setSortBy(col)
+      setSortDir('DESC')
+    }
+    setPage(1)
+  }, [sortBy])
+
   const fetchData = useCallback(async (p = 1) => {
     if (!projectId) return
     setLoading(true)
     setError('')
     try {
-      const params = new URLSearchParams({ page: String(p), limit: '100' })
+      const params = new URLSearchParams({ page: String(p), limit: '100', sortBy, sortDir })
       if (selectedRunId) params.set('runId', selectedRunId)
       else params.set('projectId', projectId)
       if (filters.industry) params.set('industry', filters.industry)
@@ -135,7 +148,7 @@ export default function ProjectResultsPage() {
     } finally {
       setLoading(false)
     }
-  }, [projectId, selectedRunId, filters.industry, filters.area, filters.status, filters.formType, filters.hasForm, debouncedSearch])
+  }, [projectId, selectedRunId, filters.industry, filters.area, filters.status, filters.formType, filters.hasForm, debouncedSearch, sortBy, sortDir])
 
   useEffect(() => { fetchData(1) }, [fetchData])
 
@@ -488,14 +501,14 @@ export default function ProjectResultsPage() {
                     className="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                   />
                 </th>
-                <th className="text-left px-3 py-3 text-xs text-gray-500 font-medium whitespace-nowrap">会社名</th>
-                <th className="text-left px-3 py-3 text-xs text-gray-500 font-medium whitespace-nowrap">業種</th>
-                <th className="text-left px-3 py-3 text-xs text-gray-500 font-medium whitespace-nowrap">エリア</th>
+                <SortableHeader label="会社名" column="name" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+                <SortableHeader label="業種" column="industry" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+                <SortableHeader label="エリア" column="area" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
                 <th className="text-left px-3 py-3 text-xs text-gray-500 font-medium whitespace-nowrap">HP URL</th>
                 <th className="text-left px-3 py-3 text-xs text-gray-500 font-medium whitespace-nowrap">フォームURL</th>
-                <th className="text-left px-3 py-3 text-xs text-gray-500 font-medium whitespace-nowrap">フォーム種別</th>
-                <th className="text-left px-3 py-3 text-xs text-gray-500 font-medium whitespace-nowrap">ステータス</th>
-                <th className="text-left px-3 py-3 text-xs text-gray-500 font-medium whitespace-nowrap">収集日時</th>
+                <SortableHeader label="フォーム種別" column="formType" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+                <SortableHeader label="ステータス" column="status" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+                <SortableHeader label="収集日時" column="collectedAt" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
                 {!selectedRunId && (
                   <th className="text-left px-3 py-3 text-xs text-gray-500 font-medium whitespace-nowrap">実行</th>
                 )}
@@ -537,12 +550,19 @@ export default function ProjectResultsPage() {
                         />
                       )}
                     </td>
-                    <td className="px-3 py-2.5 max-w-[160px]">
+                    <td className="px-3 py-2.5 max-w-[180px]">
                       <div className="font-medium text-gray-800 truncate" title={row['会社名']}>
                         {row['会社名'] || '-'}
                       </div>
                       {row['電話番号'] && (
                         <div className="text-xs text-gray-400 mt-0.5 truncate">{row['電話番号']}</div>
+                      )}
+                      {row['メールアドレス'] && (
+                        <div className="text-xs text-blue-400 mt-0.5 truncate" title={row['メールアドレス']}>
+                          <a href={`mailto:${row['メールアドレス']}`} onClick={(e) => e.stopPropagation()}>
+                            {row['メールアドレス']}
+                          </a>
+                        </div>
                       )}
                     </td>
                     <td className="px-3 py-2.5 text-gray-600 whitespace-nowrap">{row['業種'] || '-'}</td>
@@ -624,6 +644,32 @@ export default function ProjectResultsPage() {
         )}
       </div>
     </div>
+  )
+}
+
+function SortableHeader({
+  label, column, sortBy, sortDir, onSort,
+}: {
+  label: string
+  column: string
+  sortBy: string
+  sortDir: 'ASC' | 'DESC'
+  onSort: (col: string) => void
+}) {
+  const active = sortBy === column
+  return (
+    <th
+      className="text-left px-3 py-3 text-xs text-gray-500 font-medium whitespace-nowrap cursor-pointer select-none hover:text-gray-800 hover:bg-gray-100 transition-colors"
+      onClick={() => onSort(column)}
+    >
+      <div className="flex items-center gap-1">
+        {label}
+        {active
+          ? (sortDir === 'ASC' ? <ChevronUp className="w-3 h-3 text-blue-600" /> : <ChevronDown className="w-3 h-3 text-blue-600" />)
+          : <ChevronsUpDown className="w-3 h-3 opacity-30" />
+        }
+      </div>
+    </th>
   )
 }
 

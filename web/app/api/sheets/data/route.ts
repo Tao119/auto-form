@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getCompanies, countCompanies, getDistinctValues } from '@/lib/companies-db'
-import type { Company } from '@/lib/companies-db'
+import type { Company, CompanySortBy, CompanySortDir } from '@/lib/companies-db'
 import type { CompanyRow } from '@/lib/types'
 
 function toRow(c: Company): CompanyRow {
@@ -30,6 +30,9 @@ export async function GET(req: NextRequest) {
   const projectId = searchParams.get('projectId') || undefined
   const runId = searchParams.get('runId') || undefined
 
+  const sortBy = (searchParams.get('sortBy') || 'collectedAt') as CompanySortBy
+  const sortDir = (searchParams.get('sortDir') === 'ASC' ? 'ASC' : 'DESC') as CompanySortDir
+
   const baseFilters = {
     projectId,
     runId,
@@ -45,7 +48,7 @@ export async function GET(req: NextRequest) {
     // Count and paginate in SQLite — no full table scans in JS
     const total = countCompanies(baseFilters)
     const offset = (page - 1) * limit
-    const companies = getCompanies({ ...baseFilters, limit, offset })
+    const companies = getCompanies({ ...baseFilters, limit, offset, sortBy, sortDir })
     const data = companies.map(toRow)
 
     // Distinct values for dropdown filters (scoped to project, no other filters)

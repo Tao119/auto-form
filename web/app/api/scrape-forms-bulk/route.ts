@@ -8,7 +8,7 @@ const Schema = z.object({
   items: z.array(z.object({
     url: z.string(),       // HP URL to fetch
     baseUrl: z.string(),   // same as url (used as base for relative links)
-  })).min(1),
+  })).min(1).max(500),    // safety cap: prevent OOM from oversized requests
   timeoutMs: z.number().int().min(1000).max(30000).default(8000),
   concurrency: z.number().int().min(1).max(100).default(30),
   fetchFormPage: z.boolean().default(true), // also fetch the detected form page
@@ -16,6 +16,7 @@ const Schema = z.object({
 
 interface FetchResult {
   url: string
+  finalUrl: string   // actual URL after following redirects (same as url if no redirect)
   html: string
   error: string | null
   statusCode: number | null
@@ -45,15 +46,15 @@ function fetchUrl(rawUrl: string, timeoutMs: number, _depth = 0): Promise<FetchR
     }
 
     if (!rawUrl || !rawUrl.startsWith('http')) {
-      return done({ url: rawUrl, html: '', error: 'invalid_url', statusCode: null })
+      return done({ url: rawUrl, finalUrl: rawUrl, html: '', error: 'invalid_url', statusCode: null })
     }
     if (_depth > 5) {
-      return done({ url: rawUrl, html: '', error: 'too_many_redirects', statusCode: null })
+      return done({ url: rawUrl, finalUrl: rawUrl, html: '', error: 'too_many_redirects', statusCode: null })
     }
 
     let parsedUrl: URL
     try { parsedUrl = new URL(rawUrl) }
-    catch { return done({ url: rawUrl, html: '', error: 'invalid_url', statusCode: null }) }
+    catch { return done({ url: rawUrl, finalUrl: rawUrl, html: '', error: 'invalid_url', statusCode: null }) }
 
     const mod = parsedUrl.protocol === 'https:' ? https : http
     const options = {
@@ -71,7 +72,7 @@ function fetchUrl(rawUrl: string, timeoutMs: number, _depth = 0): Promise<FetchR
       rejectUnauthorized: false,
     }
 
-    const tid = setTimeout(() => done({ url: rawUrl, html: '', error: 'timeout', statusCode: null }), timeoutMs + 500)
+    const tid = setTimeout(() => done({ url: rawUrl, finalUrl: rawUrl, html: '', error: 'timeout', statusCode: null }), timeoutMs + 500)
 
     try {
       const req = mod.request(options, (res) => {
@@ -79,9 +80,10 @@ function fetchUrl(rawUrl: string, timeoutMs: number, _depth = 0): Promise<FetchR
           clearTimeout(tid)
           try {
             const redirectUrl = new URL(res.headers.location, rawUrl).toString()
+            // Recursive call: finalUrl from inner call is the true destination; override url with original
             fetchUrl(redirectUrl, timeoutMs, _depth + 1).then((r) => done({ ...r, url: rawUrl }))
           } catch {
-            done({ url: rawUrl, html: '', error: 'bad_redirect', statusCode: res.statusCode })
+            done({ url: rawUrl, finalUrl: rawUrl, html: '', error: 'bad_redirect', statusCode: res.statusCode })
           }
           return
         }
@@ -96,18 +98,32 @@ function fetchUrl(rawUrl: string, timeoutMs: number, _depth = 0): Promise<FetchR
         })
         res.on('end', () => {
           clearTimeout(tid)
-          done({ url: rawUrl, html: Buffer.concat(chunks).toString('utf8'), error: null, statusCode: res.statusCode ?? null })
+          const html = Buffer.concat(chunks).toString('utf8')
+          // Handle <meta http-equiv="refresh" content="0;url=..."> redirects (common on Japanese CMS)
+          if (_depth <= 5) {
+            const metaRefreshM = html.match(/<meta[^>]+http-equiv=["']?refresh["']?[^>]*content=["']?\d*;\s*url=["']?([^"'\s>]+)/i)
+            if (metaRefreshM) {
+              try {
+                const metaUrl = new URL(metaRefreshM[1], rawUrl).toString()
+                if (metaUrl !== rawUrl) {
+                  fetchUrl(metaUrl, timeoutMs, _depth + 1).then((r) => done({ ...r, url: rawUrl }))
+                  return
+                }
+              } catch { /* ignore malformed meta refresh */ }
+            }
+          }
+          done({ url: rawUrl, finalUrl: rawUrl, html, error: null, statusCode: res.statusCode ?? null })
         })
-        res.on('error', (e) => { clearTimeout(tid); done({ url: rawUrl, html: '', error: e.message, statusCode: null }) })
+        res.on('error', (e) => { clearTimeout(tid); done({ url: rawUrl, finalUrl: rawUrl, html: '', error: e.message, statusCode: null }) })
       })
 
-      req.on('error', (e) => { clearTimeout(tid); done({ url: rawUrl, html: '', error: e.message, statusCode: null }) })
-      req.on('timeout', () => { req.destroy(); clearTimeout(tid); done({ url: rawUrl, html: '', error: 'socket_timeout', statusCode: null }) })
+      req.on('error', (e) => { clearTimeout(tid); done({ url: rawUrl, finalUrl: rawUrl, html: '', error: e.message, statusCode: null }) })
+      req.on('timeout', () => { req.destroy(); clearTimeout(tid); done({ url: rawUrl, finalUrl: rawUrl, html: '', error: 'socket_timeout', statusCode: null }) })
       req.setTimeout(timeoutMs)
       req.end()
     } catch (e) {
       clearTimeout(tid)
-      done({ url: rawUrl, html: '', error: String(e), statusCode: null })
+      done({ url: rawUrl, finalUrl: rawUrl, html: '', error: String(e), statusCode: null })
     }
   })
 }
@@ -178,22 +194,27 @@ function extractForms(html: string, baseUrl: string): {
     '予約','ご予約','reservation','booking','ネット予約','hotpepper',
     'reserve','yoyaku','minimo','beauty.hotpepper',
   ]
+  // Booking service hostnames — links pointing here are always treated as booking, never inquiry
+  const BOOKING_URL_HOSTS = [
+    'coubic.com','airreserve.net','reserva.be','minimo.io',
+    'tablecheck.com','ebica.jp','toreta.in','hotpepper.jp',
+    'beauty.hotpepper.jp','select-type.com','icalendar.jp',
+    'reservestock.jp','reservia.jp',
+  ]
   const EXTERNAL_FORM_HOSTS = [
     // Google Forms
     'docs.google.com','forms.gle',
-    // Japanese form SaaS
+    // Japanese form SaaS (inquiry / contact)
     'form.run','tayori.com','form.kintoneapp.com','kintone.com',
     'formzu.net','freeml.net','formmailer.jp',
     // International form SaaS
     'formstack.com','typeform.com','jotform.com','tally.so','paperform.co',
     'wufoo.com','surveymonkey.com','cognito-forms.com',
-    // Reservation / booking
-    'coubic.com','airreserve.net','reserva.be','minimo.io',
-    'tablecheck.com','ebica.jp','toreta.in',
-    // LINE
+    // LINE (contact via LINE Messenger)
     'lin.ee','page.line.me','accountpage.line.me','liff.line.me',
     // Other
     'mailchimp.com','zoho.com',
+    // NOTE: booking services (coubic, airreserve, etc.) are in BOOKING_URL_HOSTS and always rejected
   ]
 
   // Require textarea (message field): filters out search boxes, login forms, newsletter signups
@@ -226,11 +247,12 @@ function extractForms(html: string, baseUrl: string): {
     const rawText = textSources.join(' ').replace(/\s+/g, ' ').trim()
 
     let absoluteUrl: string
+    let linkHost = ''
     let isExternal = false
     try {
       absoluteUrl = new URL(rawHref, baseUrl).toString()
       const baseHost = new URL(baseUrl).hostname.replace(/^www\./, '')
-      const linkHost = new URL(absoluteUrl).hostname.replace(/^www\./, '')
+      linkHost = new URL(absoluteUrl).hostname.replace(/^www\./, '')
       isExternal = baseHost !== linkHost
       if (isExternal && !EXTERNAL_FORM_HOSTS.some((h) => linkHost.includes(h))) continue
     } catch { continue }
@@ -239,6 +261,7 @@ function extractForms(html: string, baseUrl: string): {
     const lUrl = absoluteUrl.toLowerCase()
 
     const isBooking = BOOKING_KW.some((kw) => lText.includes(kw.toLowerCase()) || lUrl.includes(kw.toLowerCase()))
+      || BOOKING_URL_HOSTS.some((h) => linkHost.includes(h))
     if (isBooking) continue
 
     let score = 0
@@ -281,6 +304,39 @@ function extractForms(html: string, baseUrl: string): {
     hasContactLink = true
   }
 
+  // Detect external form services via <form action="..."> or <iframe src="...">
+  // These patterns catch embedded third-party forms that aren't linked via <a> tags
+  if (!hasContactLink) {
+    const FORM_ACTION_RE = /<form[^>]+action=["']([^"']+)["']/gi
+    let faMatch: RegExpExecArray | null
+    while ((faMatch = FORM_ACTION_RE.exec(html)) !== null) {
+      try {
+        const actionUrl = new URL(faMatch[1], baseUrl)
+        const actionHost = actionUrl.hostname.replace(/^www\./, '')
+        if (EXTERNAL_FORM_HOSTS.some((h) => actionHost.includes(h))) {
+          formUrl = actionUrl.toString()
+          hasContactLink = true
+          break
+        }
+      } catch { /* ignore */ }
+    }
+  }
+  if (!hasContactLink) {
+    const IFRAME_SRC_RE = /<iframe[^>]+src=["']([^"']+)["']/gi
+    let ifMatch: RegExpExecArray | null
+    while ((ifMatch = IFRAME_SRC_RE.exec(html)) !== null) {
+      try {
+        const iframeUrl = new URL(ifMatch[1], baseUrl)
+        const iframeHost = iframeUrl.hostname.replace(/^www\./, '')
+        if (EXTERNAL_FORM_HOSTS.some((h) => iframeHost.includes(h))) {
+          formUrl = iframeUrl.toString()
+          hasContactLink = true
+          break
+        }
+      } catch { /* ignore */ }
+    }
+  }
+
   const hasEmailContact = !!email
   // NOTE: email-only sites are NOT counted as having a contact form.
   // Email is stored for reference but formUrl must point to an actual web form.
@@ -301,41 +357,61 @@ function extractForms(html: string, baseUrl: string): {
 }
 
 /**
- * Verify that a fetched HTML page actually contains a contact form.
- * Rejects login pages, search boxes, thank-you pages, booking-only pages, etc.
+ * Verify that a fetched HTML page actually contains a contact / inquiry form.
+ * Rejects login pages, search boxes, newsletter signups, blog comments, thank-you pages, etc.
+ *
+ * Design goals:
+ *  - High precision over recall: when in doubt, reject.  GPT does the final call.
+ *  - Textarea + specific Japanese/English inquiry keyword → accept.
+ *  - Email/tel input + submit → only accept when keyword appears IN the form context,
+ *    not just anywhere on the page (prevents newsletter-on-homepage false positives).
  */
 function validateFormPage(html: string): boolean {
-  // External form embeds (iframe or script pointing to known form SaaS)
-  if (/docs\.google\.com\/forms|form\.run|typeform\.com|jotform\.com|tayori\.com|formstack\.com|coubic\.com/i.test(html)) return true
+  // External form embeds always accepted (Google Forms, Tayori, typeform, etc.)
+  if (/docs\.google\.com\/forms|form\.run|typeform\.com|jotform\.com|tayori\.com|formstack\.com|coubic\.com|formzu\.net|form\.kintoneapp/i.test(html)) return true
 
-  // Reject thank-you / completion pages (no point sending to these)
+  // Reject confirmed thank-you / completion pages
   const titleM = html.match(/<title[^>]*>([^<]*)<\/title>/i)
   const title = titleM ? titleM[1].toLowerCase() : ''
-  if (/送信完了|ありがとうございます|受け付けました|thank you|submission|complete|success/.test(title)) {
-    // Still check for a form — some sites show a thank-you AND the form on the same page
+  if (/送信完了|ありがとうございます|受け付けました|thank you|submission complete|success/.test(title)) {
     if (!/<form[\s>]/i.test(html)) return false
   }
 
-  const hasForm = /<form[\s>]/i.test(html)
-  if (!hasForm) return false
+  if (!/<form[\s>]/i.test(html)) return false
 
-  // textarea is the strongest signal — almost all inquiry forms have a message field.
-  // But only accept if a contact-related keyword is present nearby (avoids forum/review textareas)
+  // ── Textarea path ────────────────────────────────────────────────────────
+  // Textarea is the strongest inquiry signal.  Accept only when a specific
+  // inquiry-related keyword appears on the page (avoids blog comments, reviews).
+  // "message" and generic "content/内容" intentionally excluded — too noisy.
   if (/textarea/i.test(html)) {
-    const hasContactKwForTextarea = /お問い合わせ|ご連絡|ご相談|お問合|inquiry|contact|message|メッセージ|内容|ご内容|ご質問|お問い合わせ内容/i.test(html)
-    if (hasContactKwForTextarea) return true
-    // Textarea with no contact keyword: may be a review/forum form. Check for name + email fields.
-    const hasNameField = /<input[^>]+(name|type)=["']?(text|name|your-name)["']?/i.test(html)
+    const INQUIRY_KW = /お問い合わせ|ご連絡|ご相談|お問合|inquiry|contact us|contact form|ご質問|お問い合わせ内容|お問合せ内容|メッセージ内容|ご意見/i
+    if (INQUIRY_KW.test(html)) return true
+    // Textarea without inquiry keyword: only accept if name + email fields present
+    // (catches minimal contact forms that label fields generically)
+    const hasNameField = /<input[^>]+(name|id)=["']?(?:name|your[_-]?name|お名前|namae)/i.test(html)
     const hasEmailField = /<input[^>]+type=["']?email/i.test(html)
     if (hasNameField && hasEmailField) return true
+    // fallback: any text input + email field + submit (covers generic English forms)
+    const hasTextInput = /<input[^>]+type=["']?text/i.test(html)
+    const hasSubmitFallback = /<(input|button)[^>]*type=["']?submit/i.test(html)
+    if (hasTextInput && hasEmailField && hasSubmitFallback) return true
   }
 
-  // email/tel input + submit + contact keyword (form without textarea)
+  // ── Email/tel + submit path ──────────────────────────────────────────────
+  // Require the inquiry keyword to appear WITHIN the form element's HTML context
+  // (prevents newsletter signup on homepage from matching "contact" link text elsewhere).
   const hasContactInput = /<input[^>]+type=["']?(email|tel)/i.test(html)
   const hasSubmit = /<(input|button)[^>]*type=["']?submit/i.test(html)
-  const hasContactKw = /お問い合わせ|ご連絡|ご相談|inquiry|contact|message|send/i.test(html)
+  if (hasContactInput && hasSubmit) {
+    const formIdx = html.toLowerCase().indexOf('<form')
+    const formContext = formIdx !== -1
+      ? html.slice(Math.max(0, formIdx - 500), Math.min(html.length, formIdx + 4000))
+      : html
+    const FORM_KW = /お問い合わせ|ご連絡|ご相談|お問合|inquiry|contact us|contact form|ご質問|お問い合わせ内容/i
+    if (FORM_KW.test(formContext)) return true
+  }
 
-  return hasContactInput && hasSubmit && hasContactKw
+  return false
 }
 
 /**
@@ -427,30 +503,58 @@ async function processItem(
     }
   }
 
-  // Step 4 (precision boost): if still no form found, probe common contact paths
+  // Step 4 (precision boost): if still no form found, probe common contact paths.
+  // Uses soft-404 detection to avoid false positives when the site serves the homepage
+  // for any unknown path (common on Japanese CMS-based sites).
   if (fetchFormPage && !extracted.hasContactLink) {
     let baseOrigin: string
     try { baseOrigin = new URL(baseUrl).origin } catch { return { url, baseUrl, ...extracted, formPageText, formPageTitle, error: null } }
 
+    const hpTitle = extractTitle(hpFetch.html).trim().toLowerCase()
+    const hpLen = hpFetch.html.length
+    const hpNorm = baseUrl.replace(/\/$/, '').toLowerCase()
+
     let probed = 0
     for (const suffix of PROBE_PATHS) {
       if (probed >= PROBE_LIMIT) break
-      const probeUrl = baseOrigin + suffix
       probed++
-      const result = await tryFetchAndValidate(probeUrl, null)
-      if (result?.valid) {
-        extracted.formUrl = probeUrl
-        extracted.hasContactLink = true
-        formPageText = cleanHtmlToText(result.html)
-        formPageTitle = extractTitle(result.html)
-        // Also try to extract phone/email from the contact page if not found yet
-        if (!extracted.phone || !extracted.email) {
-          const extras = extractForms(result.html, probeUrl)
-          if (!extracted.phone && extras.phone) extracted.phone = extras.phone
-          if (!extracted.email && extras.email) extracted.email = extras.email
-        }
-        break
+      const probeUrl = baseOrigin + suffix
+
+      const probeResult = await fetchUrl(probeUrl, timeoutMs)
+      if (probeResult.error || !probeResult.html) continue
+      if (probeResult.statusCode && probeResult.statusCode >= 400) continue
+
+      const probeHtml = probeResult.html
+
+      // ── Soft-404 detection ──────────────────────────────────────────
+      // 1. Final URL is the homepage (HTTP redirect to homepage)
+      const probeFinalNorm = (probeResult.finalUrl || probeUrl).replace(/\/$/, '').toLowerCase()
+      if (probeFinalNorm === hpNorm) continue
+
+      // 2. Same page title as homepage → likely same content served at every path
+      const probeTitle = extractTitle(probeHtml).trim().toLowerCase()
+      if (hpTitle && probeTitle && probeTitle === hpTitle) continue
+
+      // 3. Near-identical HTML length (within 3%) → likely same page (soft 404)
+      if (hpLen > 200 && probeHtml.length > 200) {
+        const lenRatio = Math.abs(hpLen - probeHtml.length) / Math.max(hpLen, probeHtml.length)
+        if (lenRatio < 0.03) continue
       }
+      // ───────────────────────────────────────────────────────────────
+
+      if (!validateFormPage(probeHtml)) continue
+
+      extracted.formUrl = probeUrl
+      extracted.hasContactLink = true
+      formPageText = cleanHtmlToText(probeHtml)
+      formPageTitle = probeTitle || extractTitle(probeHtml)
+      // Re-extract metadata from the actual contact page (phone, email, formTypeHint)
+      const probeExtracted = extractForms(probeHtml, probeUrl)
+      if (!extracted.phone && probeExtracted.phone) extracted.phone = probeExtracted.phone
+      if (!extracted.email && probeExtracted.email) extracted.email = probeExtracted.email
+      // Use contact page's formTypeHint (more accurate than HP-level hint)
+      extracted.formTypeHint = probeExtracted.formTypeHint || 'inquiry'
+      break
     }
   }
 
@@ -461,6 +565,9 @@ async function processItem(
  * Sliding-window concurrent processor.
  * Keeps at most `concurrency` items in-flight at all times.
  * Unlike fixed-batch mode, fast completions immediately free slots for new items.
+ *
+ * Deduplication: if the same HP URL appears multiple times in the batch, all copies
+ * share a single in-flight Promise — no duplicate network requests.
  */
 async function processBatch(
   items: Array<{ url: string; baseUrl: string }>,
@@ -471,11 +578,21 @@ async function processBatch(
   const results: FormExtractResult[] = new Array(items.length)
   let nextIndex = 0
 
+  // url → Promise for deduplication across concurrent workers
+  const inFlight = new Map<string, Promise<FormExtractResult>>()
+
   const worker = async () => {
     while (true) {
       const i = nextIndex++
       if (i >= items.length) break
-      results[i] = await processItem(items[i].url, items[i].baseUrl, timeoutMs, fetchFormPage)
+      const item = items[i]
+
+      let promise = inFlight.get(item.url)
+      if (!promise) {
+        promise = processItem(item.url, item.baseUrl, timeoutMs, fetchFormPage)
+        inFlight.set(item.url, promise)
+      }
+      results[i] = await promise
     }
   }
 

@@ -45,6 +45,9 @@ export interface CompanyInput {
   importedFromSheets?: boolean
 }
 
+export type CompanySortBy = 'collectedAt' | 'name' | 'industry' | 'area' | 'status' | 'formType'
+export type CompanySortDir = 'ASC' | 'DESC'
+
 export interface CompanyFilters {
   projectId?: string
   runId?: string
@@ -54,6 +57,8 @@ export interface CompanyFilters {
   formType?: string
   search?: string  // searches name, hpUrl, formUrl
   hasForm?: string // 'true' = formUrl != '', 'false' = formUrl = ''
+  sortBy?: CompanySortBy
+  sortDir?: CompanySortDir
   limit?: number
   offset?: number
 }
@@ -186,7 +191,12 @@ export function getCompanies(filters?: CompanyFilters): Company[] {
     params.offset = filters.offset ?? 0
   }
 
-  return db.prepare(`SELECT * FROM companies ${where} ORDER BY collectedAt DESC ${limitClause}`).all(params) as Company[]
+  // Whitelist allowed sort columns to prevent SQL injection
+  const ALLOWED_SORT: ReadonlySet<string> = new Set(['collectedAt', 'name', 'industry', 'area', 'status', 'formType'])
+  const sortCol = filters?.sortBy && ALLOWED_SORT.has(filters.sortBy) ? filters.sortBy : 'collectedAt'
+  const sortDir = filters?.sortDir === 'ASC' ? 'ASC' : 'DESC'
+
+  return db.prepare(`SELECT * FROM companies ${where} ORDER BY ${sortCol} ${sortDir} ${limitClause}`).all(params) as Company[]
 }
 
 export function countCompanies(filters?: Omit<CompanyFilters, 'limit' | 'offset'>): number {

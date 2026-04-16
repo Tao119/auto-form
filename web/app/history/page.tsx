@@ -112,7 +112,7 @@ export default function HistoryPage() {
           industry: st?.industry ?? '',
           area: st?.area ?? '',
           keywords: st?.keywords ?? [],
-          maxResults: 50,
+          maxResults: st?.maxResults ?? 50,  // use original run's maxResults
         }),
       })
       await load()
@@ -275,7 +275,12 @@ export default function HistoryPage() {
                     <div className="space-y-1">
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <StatusBadge status={run.status} />
-                        {run.status === 'running' && (
+                        {run.status === 'pending' && run.queuePosition !== undefined && run.queuePosition > 0 && (
+                          <span className="text-xs text-yellow-600 font-medium">
+                            #{run.queuePosition}待ち
+                          </span>
+                        )}
+                        {(run.status === 'running' || run.status === 'pending') && (
                           <button
                             onClick={() => cancelRun(run.id)}
                             className="text-xs px-1.5 py-0.5 rounded border border-gray-300 text-gray-500 hover:text-red-600 hover:border-red-300 transition-colors"
