@@ -250,6 +250,10 @@ function extractForms(html: string, baseUrl: string): {
     // International form SaaS
     'formstack.com','typeform.com','jotform.com','tally.so','paperform.co',
     'wufoo.com','surveymonkey.com','cognito-forms.com',
+    // CRM-embedded contact forms
+    'share.hsforms.com','forms.hubspot.com',  // HubSpot
+    'share.formsite.com',                     // Formsite
+    'app.getresponse.com',                    // GetResponse
     // LINE (contact via LINE Messenger)
     'lin.ee','page.line.me','accountpage.line.me','liff.line.me',
     // Other
@@ -364,7 +368,13 @@ function extractForms(html: string, baseUrl: string): {
     || html.match(/(0\d{1,4}[－\-–—(（]\d{1,4}[)）\-–—]\d{3,4})/)  // hyphen or bracket style
     || html.match(/(0[0-9]{9,10})/)              // compact 10-11 digit number
     || html.match(/(\+81[\-\s\d]{8,16})/)        // international +81 prefix
-  const phone = phoneM ? phoneM[1].replace(/[（(]/g, '(').replace(/[）)]/g, ')').replace(/[－–—]/g, '-').replace(/\s+/g, '').trim() : null
+  const rawPhone = phoneM ? phoneM[1].replace(/[（(]/g, '(').replace(/[）)]/g, ')').replace(/[－–—]/g, '-').replace(/\s+/g, '').trim() : null
+  // Validate: stripped digits must be 10-11 (JP domestic) or start with +81 (international)
+  const phoneDigits = rawPhone ? rawPhone.replace(/[^\d]/g, '') : ''
+  const phone = rawPhone && (
+    (phoneDigits.length >= 10 && phoneDigits.length <= 11 && phoneDigits.startsWith('0')) ||
+    rawPhone.startsWith('+81')
+  ) ? rawPhone : null
 
   let hasContactLink = links.length > 0
   let formUrl: string | null = links.length > 0 ? links[0].url : null
@@ -487,8 +497,8 @@ function _validateFormContext(formCtx: string): boolean {
  *  - Email/tel input + submit → only accept when keyword appears IN the form context.
  */
 function validateFormPage(html: string): boolean {
-  // External form embeds always accepted (Google Forms, Tayori, typeform, etc.)
-  if (/docs\.google\.com\/forms|form\.run|typeform\.com|jotform\.com|tayori\.com|formstack\.com|formzu\.net|form\.kintoneapp|mailform\.jp|mfcontacts\.com|formrun\.com|tally\.so|cognito-forms\.com|wufoo\.com/i.test(html)) return true
+  // External form embeds always accepted (Google Forms, Tayori, typeform, HubSpot, etc.)
+  if (/docs\.google\.com\/forms|form\.run|typeform\.com|jotform\.com|tayori\.com|formstack\.com|formzu\.net|form\.kintoneapp|mailform\.jp|mfcontacts\.com|formrun\.com|tally\.so|cognito-forms\.com|wufoo\.com|share\.hsforms\.com|forms\.hubspot\.com/i.test(html)) return true
   // LINE contact links — always valid contact method
   if (/lin\.ee\/|page\.line\.me\/|accountpage\.line\.me\/|liff\.line\.me\//i.test(html)) return true
 
@@ -534,9 +544,12 @@ const PROBE_PATHS = [
   '/contact/index.html', '/inquiry/index.html',
   '/contact/index.php',  '/inquiry/index.php',
   '/mailform/index.html', '/mailform/index.php',
+  // PHP form handlers common on Japanese rental hosting
+  '/mail.php', '/send.php', '/post.php',
   // CGI patterns common on Japanese hosting (rental servers: lolipop, xserver, sakura)
   '/cgi-bin/contact.cgi', '/cgi-bin/inquiry.cgi', '/cgi-bin/form.cgi',
   '/cgi-bin/mailform.cgi', '/cgi-bin/contact.pl', '/cgi-bin/form.pl',
+  '/cgi-bin/mail.cgi', '/cgi-bin/post.cgi',
   // WordPress / common CMS slugs
   '/contact-us', '/contact-us/', '/get-in-touch', '/send-message',
   // URL-encoded Japanese paths

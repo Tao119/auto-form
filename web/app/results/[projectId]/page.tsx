@@ -622,8 +622,16 @@ export default function ProjectResultsPage() {
               )}
               {!loading && rows.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="px-4 py-12 text-center text-gray-400">
-                    データがありません
+                  <td colSpan={10} className="px-4 py-12 text-center">
+                    <p className="text-gray-400 text-sm mb-2">データがありません</p>
+                    {hasFilters && (
+                      <button
+                        onClick={clearFilters}
+                        className="text-xs text-blue-600 hover:text-blue-800 underline"
+                      >
+                        フィルターをクリア
+                      </button>
+                    )}
                   </td>
                 </tr>
               )}
