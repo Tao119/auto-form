@@ -495,7 +495,7 @@ export default function ProjectResultsPage() {
               </option>
             ))}
           </select>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 flex-wrap">
             {/* hasForm quick toggle buttons */}
             {(['', 'true', 'false'] as const).map((val) => {
               const label = val === '' ? 'フォーム:全て' : val === 'true' ? 'あり' : 'なし'
@@ -514,6 +514,18 @@ export default function ProjectResultsPage() {
                 </button>
               )
             })}
+            {/* Quick preset: フォームあり + 未送信 */}
+            <button
+              onClick={() => setFilters({ ...filters, hasForm: 'true', status: '未送信' })}
+              className={`text-xs px-2.5 py-2 rounded border transition-colors whitespace-nowrap ${
+                filters.hasForm === 'true' && filters.status === '未送信'
+                  ? 'bg-green-600 border-green-600 text-white'
+                  : 'bg-white border-gray-300 text-gray-600 hover:border-gray-400'
+              }`}
+              title="フォームあり + 未送信の絞り込み"
+            >
+              未処理のみ
+            </button>
             {hasFilters && (
               <button
                 onClick={clearFilters}
@@ -547,6 +559,13 @@ export default function ProjectResultsPage() {
                 className="text-xs px-2 py-1 bg-yellow-600 hover:bg-yellow-700 disabled:bg-gray-300 text-white rounded transition-colors"
               >
                 スキップ
+              </button>
+              <button
+                onClick={() => handleBatchStatusUpdate('エラー')}
+                disabled={batchUpdating}
+                className="text-xs px-2 py-1 bg-red-100 hover:bg-red-200 disabled:bg-gray-300 text-red-700 rounded transition-colors"
+              >
+                エラー
               </button>
               <button
                 onClick={() => handleBatchStatusUpdate('未送信')}
