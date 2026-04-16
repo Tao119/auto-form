@@ -11,6 +11,12 @@ import { z } from 'zod'
 const MAX_CONCURRENT_BATCHES = 2
 let _activeBatches = 0
 
+// ── Shared HTTP agents with keep-alive ────────────────────────────
+// Connection reuse significantly reduces latency for sequential fetches to the
+// same host (HP fetch → form page validation → probe paths).
+const _httpAgent  = new http.Agent({ keepAlive: true, maxSockets: 64, maxFreeSockets: 32 })
+const _httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 64, maxFreeSockets: 32, rejectUnauthorized: false })
+
 const Schema = z.object({
   items: z.array(z.object({
     url: z.string(),       // HP URL to fetch
@@ -63,20 +69,22 @@ function fetchUrl(rawUrl: string, timeoutMs: number, _depth = 0): Promise<FetchR
     try { parsedUrl = new URL(rawUrl) }
     catch { return done({ url: rawUrl, finalUrl: rawUrl, html: '', error: 'invalid_url', statusCode: null }) }
 
-    const mod = parsedUrl.protocol === 'https:' ? https : http
+    const isHttps = parsedUrl.protocol === 'https:'
+    const mod = isHttps ? https : http
     const options = {
       hostname: parsedUrl.hostname,
-      port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
+      port: parsedUrl.port || (isHttps ? 443 : 80),
       path: parsedUrl.pathname + parsedUrl.search,
       method: 'GET',
       timeout: timeoutMs,
+      agent: isHttps ? _httpsAgent : _httpAgent,
       headers: {
         'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
         'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8',
         'Accept-Language': 'ja,en;q=0.5',
         'Accept-Encoding': 'gzip, deflate',
+        'Connection': 'keep-alive',
       },
-      rejectUnauthorized: false,
     }
 
     const tid = setTimeout(() => done({ url: rawUrl, finalUrl: rawUrl, html: '', error: 'timeout', statusCode: null }), timeoutMs + 500)

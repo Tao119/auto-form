@@ -5,6 +5,9 @@ import * as zlib from 'zlib'
 import { URL } from 'url'
 import { z } from 'zod'
 
+const _httpAgent  = new http.Agent({ keepAlive: true, maxSockets: 64 })
+const _httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 64, rejectUnauthorized: false })
+
 const Schema = z.object({
   urls: z.array(z.string()).min(1),
   timeoutMs: z.number().int().min(1000).max(30000).default(8000),
@@ -35,20 +38,22 @@ function fetchUrl(rawUrl: string, timeoutMs: number): Promise<FetchResult> {
       return done({ url: rawUrl, html: '', error: 'invalid_url', statusCode: null })
     }
 
-    const mod = parsedUrl.protocol === 'https:' ? https : http
+    const isHttps = parsedUrl.protocol === 'https:'
+    const mod = isHttps ? https : http
     const options = {
       hostname: parsedUrl.hostname,
-      port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
+      port: parsedUrl.port || (isHttps ? 443 : 80),
       path: parsedUrl.pathname + parsedUrl.search,
       method: 'GET',
       timeout: timeoutMs,
+      agent: isHttps ? _httpsAgent : _httpAgent,
       headers: {
         'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
         'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8',
         'Accept-Language': 'ja,en;q=0.5',
         'Accept-Encoding': 'gzip, deflate',
+        'Connection': 'keep-alive',
       },
-      rejectUnauthorized: false,
     }
 
     const tid = setTimeout(() => done({ url: rawUrl, html: '', error: 'timeout', statusCode: null }), timeoutMs + 500)
