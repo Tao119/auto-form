@@ -183,6 +183,8 @@ function getDb(): Database.Database {
         OR formUrl LIKE '%://eparkdentist.com/%'
         OR formUrl LIKE '%dentamap.jp/%'
         OR formUrl LIKE '%://ekiten.jp/%'
+        OR formUrl LIKE '%b-merit.jp%'
+        OR (formUrl LIKE '%coubic.com%' AND formUrl NOT LIKE '%/contact%')
       )
   `)
   return _db

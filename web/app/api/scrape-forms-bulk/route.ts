@@ -114,6 +114,9 @@ const BOOKING_URL_HOSTS = [
   'haisha-yoyaku.jp',   // 歯科予約専用サイト
   'eparkdentist.com',   // EPARK歯科
   'dentamap.jp',        // 歯科MAP予約
+  // Medical/beauty appointment booking SaaS
+  'b-merit.jp',         // 医療・美容予約SaaS（複数サブドメイン使用）
+  'airrsv.net',         // Air Reserve（Recruit）予約システム
 ]
 const EXTERNAL_FORM_HOSTS = [
   'docs.google.com','forms.gle',
@@ -182,6 +185,8 @@ const REDIRECT_REJECT_HOSTS = [
   // Beauty/dental booking (keep in sync with BOOKING_URL_HOSTS)
   'b.hpr.jp','riyou.jp','stekina.com','ekiten.jp',
   'haisha-yoyaku.jp','eparkdentist.com','dentamap.jp',
+  // Medical/beauty appointment booking SaaS (keep in sync with BOOKING_URL_HOSTS)
+  'b-merit.jp','airrsv.net',
 ]
 // Fast-pass for known external form SaaS — page is a valid contact form without further analysis
 const EXTERNAL_FORM_FAST_PASS_RE = /docs\.google\.com\/forms|forms\.gle|form\.run|formrun\.com|typeform\.com|jotform\.com|tayori\.com|formstack\.com|formzu\.net|form\.kintoneapp|kintone\.com|freeml\.net|mailform\.jp|mfcontact\.com|mfcontacts\.com|formmailer\.jp|tally\.so|paperform\.co|cognito-forms\.com|wufoo\.com|surveymonkey\.com|share\.hsforms\.com|forms\.hubspot\.com|share\.formsite\.com|app\.getresponse\.com|mailchimp\.com|zoho\.com|forms\.office\.com|forms\.microsoft\.com|123formbuilder\.com|formassembly\.com|forms\.app|tripetto\.app|gmomakeform\.com|formhub\.jp|questant\.jp|sendinblue\.com|brevo\.com|f-formz\.com|ws\.formzu\.net|spiral\.ne\.jp|spiral-forms\.net|webcas\.net|n-form\.jp|secure\.n-form\.jp|webto\.salesforce\.com|elfsight\.com|plus\.form-mailer\.jp/i
