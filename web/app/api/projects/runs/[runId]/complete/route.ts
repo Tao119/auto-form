@@ -60,10 +60,20 @@ export async function POST(
     const body = Schema.parse(await req.json())
     const { runId } = params
 
-    const estimatedCostUsd =
-      body.tokensInput !== undefined && body.tokensOutput !== undefined
-        ? calcCostUsd(body.model ?? 'gpt-4o-mini', body.tokensInput, body.tokensOutput)
-        : undefined
+    // LLM トークンが送られてきた場合はそれからコストを計算する
+    // 送られてこない（GPTスタブ運用）場合は Google Places API クエリ数から推計する
+    // Places API: subAreaCount × 4kw × 1ページ平均 × $0.032/request
+    const PLACES_API_COST_PER_QUERY = 0.032
+    const PLACES_KW_COUNT = 4
+    let estimatedCostUsd: number | undefined
+    if (body.tokensInput !== undefined && body.tokensOutput !== undefined) {
+      estimatedCostUsd = calcCostUsd(body.model ?? 'gpt-4o-mini', body.tokensInput, body.tokensOutput)
+    } else {
+      const subAreaCount = body.results?.subAreaCount
+      if (subAreaCount !== undefined && subAreaCount > 0) {
+        estimatedCostUsd = subAreaCount * PLACES_KW_COUNT * PLACES_API_COST_PER_QUERY
+      }
+    }
 
     // Validate and filter company records
     let actualAdded = 0

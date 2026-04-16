@@ -380,9 +380,17 @@ export default function HistoryPage() {
                         {run.estimatedCostUsd !== undefined && (
                           <div className="flex items-center gap-1 text-xs text-gray-400">
                             <DollarSign className="w-3 h-3 text-green-500 flex-shrink-0" />
-                            ¥{(run.estimatedCostUsd * 150).toFixed(2)}
+                            ${run.estimatedCostUsd.toFixed(2)}
                           </div>
                         )}
+                      </div>
+                    ) : run.estimatedCostUsd !== undefined ? (
+                      <div className="space-y-0.5">
+                        <div className="flex items-center gap-1 text-xs text-gray-400">
+                          <DollarSign className="w-3 h-3 text-green-500 flex-shrink-0" />
+                          ${run.estimatedCostUsd.toFixed(2)}
+                          <span className="text-gray-300 text-xs">Places</span>
+                        </div>
                       </div>
                     ) : (
                       <span className="text-gray-300 text-xs">-</span>
