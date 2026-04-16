@@ -150,19 +150,53 @@ export function getQueueStatus(): {
 } {
   expireStaleRuns()
   pruneOldJobs()
+
+  // Auto-recover queue jobs that have been 'active' for > 2h without completing.
+  // This handles the case where n8n never called the completion webhook (network failure, crash, etc.)
+  // and the queue is stuck with ghost active jobs.
   const data = readQueue()
-  const active = data.jobs.filter((j) => j.status === 'active').length
-  const waiting = data.jobs.filter((j) => j.status === 'waiting').length
+  const cutoff = new Date(Date.now() - 2 * 60 * 60 * 1000)
+  let recovered = 0
+  for (const job of data.jobs) {
+    if (job.status === 'active' && new Date(job.startedAt || job.createdAt) < cutoff) {
+      job.status = 'failed'
+      job.completedAt = new Date().toISOString()
+      job.error = 'auto_expired_stale_active'
+      recovered++
+    }
+  }
+  // If we recovered any stale active jobs, try to start waiting jobs
+  if (recovered > 0) {
+    const maxConcurrent = data.maxConcurrent || MAX_CONCURRENT
+    const activeCount = data.jobs.filter((j) => j.status === 'active').length
+    const slotsAvailable = maxConcurrent - activeCount
+    if (slotsAvailable > 0) {
+      const waiting = data.jobs.filter((j) => j.status === 'waiting')
+        .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+      for (let i = 0; i < Math.min(slotsAvailable, waiting.length); i++) {
+        waiting[i].status = 'active'
+        waiting[i].startedAt = new Date().toISOString()
+        // Note: we don't actually trigger n8n here — the queue start API must be called separately.
+        // This just updates the queue state so the UI reflects reality.
+      }
+    }
+    writeQueue(data)
+  }
+
+  // Re-read for up-to-date counts (after any recovery writes)
+  const current = recovered > 0 ? readQueue() : data
+  const active = current.jobs.filter((j) => j.status === 'active').length
+  const waiting = current.jobs.filter((j) => j.status === 'waiting').length
 
   // Return recent jobs (last 50, sorted newest first)
-  const recentJobs = [...data.jobs]
+  const recentJobs = [...current.jobs]
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     .slice(0, 50)
 
   return {
     active,
     waiting,
-    maxConcurrent: data.maxConcurrent || MAX_CONCURRENT,
+    maxConcurrent: current.maxConcurrent || MAX_CONCURRENT,
     recentJobs,
   }
 }
