@@ -366,6 +366,14 @@ function extractForms(html: string, baseUrl: string): {
     if (score >= 8) links.push({ url: absoluteUrl, text: rawText.slice(0, 80), score })
   }
   links.sort((a, b) => b.score - a.score)
+  // Deduplicate by URL (same contact page often linked from nav + footer — keep highest score)
+  const _seenLinkUrls = new Set<string>()
+  const uniqueLinks = links.filter((l) => {
+    const k = l.url.toLowerCase().replace(/\/$/, '')
+    if (_seenLinkUrls.has(k)) return false
+    _seenLinkUrls.add(k)
+    return true
+  })
 
   const mailtoM = html.match(/mailto:([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/i)
   // Fallback email from page text: require realistic TLD (2-6 chars) and exclude CSS-like patterns
@@ -392,8 +400,8 @@ function extractForms(html: string, baseUrl: string): {
     rawPhone.startsWith('+81')
   ) ? rawPhone : null
 
-  let hasContactLink = links.length > 0
-  let formUrl: string | null = links.length > 0 ? links[0].url : null
+  let hasContactLink = uniqueLinks.length > 0
+  let formUrl: string | null = uniqueLinks.length > 0 ? uniqueLinks[0].url : null
 
   if (!hasContactLink && hasInlineForm) {
     formUrl = baseUrl
@@ -449,7 +457,7 @@ function extractForms(html: string, baseUrl: string): {
     formTypeHint = 'inquiry'
   }
 
-  return { formUrl, email, phone, hasContactLink, hasInlineForm, hasEmailContact, formTypeHint, contactLinks: links.slice(0, 3) }
+  return { formUrl, email, phone, hasContactLink, hasInlineForm, hasEmailContact, formTypeHint, contactLinks: uniqueLinks.slice(0, 3) }
 }
 
 /**
