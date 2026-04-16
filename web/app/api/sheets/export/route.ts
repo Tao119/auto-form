@@ -50,6 +50,8 @@ export async function GET(req: NextRequest) {
     formType: searchParams.get('formType') || undefined,
     search:   searchParams.get('search') || undefined,
     hasForm:  searchParams.get('hasForm') || undefined,
+    sortBy:   (searchParams.get('sortBy') || 'collectedAt') as import('@/lib/companies-db').CompanySortBy,
+    sortDir:  (searchParams.get('sortDir') === 'ASC' ? 'ASC' : 'DESC') as import('@/lib/companies-db').CompanySortDir,
   }
 
   try {

@@ -251,6 +251,8 @@ export default function ProjectResultsPage() {
       if (filters.formType) params.set('formType', filters.formType)
       if (filters.hasForm) params.set('hasForm', filters.hasForm)
       if (filters.search) params.set('search', filters.search)
+      params.set('sortBy', sortBy)
+      params.set('sortDir', sortDir)
       const res = await fetch(`/api/sheets/export?${params}`)
       if (!res.ok) throw new Error('エクスポート失敗')
       const blob = await res.blob()
