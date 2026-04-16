@@ -322,7 +322,10 @@ function extractForms(html: string, baseUrl: string): {
     let linkHost = ''
     let isExternal = false
     try {
-      absoluteUrl = new URL(rawHref, baseUrl).toString()
+      const parsedLink = new URL(rawHref, baseUrl)
+      // Strip URL fragment — fragments are client-side only; servers always return the same page
+      parsedLink.hash = ''
+      absoluteUrl = parsedLink.toString()
       const baseHost = new URL(baseUrl).hostname.replace(/^www\./, '')
       linkHost = new URL(absoluteUrl).hostname.replace(/^www\./, '')
       // Treat same-domain subdomains as internal (e.g. form.example.co.jp for example.co.jp)
