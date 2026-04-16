@@ -33,6 +33,7 @@ export interface FormExtractResult {
   contactLinks: Array<{ url: string; text: string; score: number }>
   formPageText: string | null  // cleaned text from form page (for GPT)
   formPageTitle: string | null
+  formTypeHint: 'inquiry' | 'booking' | 'LINE' | null  // detected form type hint
   error: string | null
 }
 
@@ -151,6 +152,7 @@ function extractForms(html: string, baseUrl: string): {
   hasContactLink: boolean
   hasInlineForm: boolean
   hasEmailContact: boolean
+  formTypeHint: 'inquiry' | 'booking' | 'LINE' | null
   contactLinks: Array<{ url: string; text: string; score: number }>
 } {
   // Specific contact-page text anchors — require the link text to clearly say "contact us"
@@ -280,7 +282,19 @@ function extractForms(html: string, baseUrl: string): {
   // NOTE: email-only sites are NOT counted as having a contact form.
   // Email is stored for reference but formUrl must point to an actual web form.
 
-  return { formUrl, email, phone, hasContactLink, hasInlineForm, hasEmailContact, contactLinks: links.slice(0, 3) }
+  // Determine formTypeHint from detected links and page content
+  const lHtml = html.toLowerCase()
+  const LINE_HINT_PATTERNS = [/lin\.ee\//i, /page\.line\.me\//i, /accountpage\.line\.me\//i, /liff\.line\.me\//i]
+  let formTypeHint: 'inquiry' | 'booking' | 'LINE' | null = null
+  if (formUrl && LINE_HINT_PATTERNS.some((re) => re.test(formUrl!))) {
+    formTypeHint = 'LINE'
+  } else if (BOOKING_KW.some((kw) => lHtml.includes(kw.toLowerCase())) && !hasInlineForm) {
+    formTypeHint = 'booking'
+  } else if (hasContactLink || hasInlineForm) {
+    formTypeHint = 'inquiry'
+  }
+
+  return { formUrl, email, phone, hasContactLink, hasInlineForm, hasEmailContact, formTypeHint, contactLinks: links.slice(0, 3) }
 }
 
 /**
@@ -346,7 +360,7 @@ async function processItem(
       url, baseUrl,
       formUrl: null, email: null, phone: null,
       hasContactLink: false, hasInlineForm: false, hasEmailContact: false,
-      contactLinks: [], formPageText: null, formPageTitle: null,
+      formTypeHint: null, contactLinks: [], formPageText: null, formPageTitle: null,
       error: hpFetch.error,
     }
   }
