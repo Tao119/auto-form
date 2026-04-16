@@ -75,7 +75,7 @@ const EXTERNAL_FORM_HOSTS = [
 // Trailing boundary (\/|\.|\?|$) prevents partial matches: /recruit-info is NOT rejected.
 const NON_CONTACT_SUFFIX_RE = /\/(privacy[-_]?(?:policy)?|terms?(?:[-_]of[-_]service)?|sitemap|blog|news|articles?|posts?|column|archive|categories?|shop|cart|login|sign[-_]?up|register|logout|faq|access(?:map)?|recruit(?:ment)?|career|jobs?|about(?:-us)?|company|profile|gallery|works|portfolio|media|press|staff|team|members?|events?|downloads?|videos?|photos?|voice(?:s)?|search|checkout|product(?:s)?|service(?:s)?|feature(?:s)?|pricing|plan(?:s)?|case[-_]?stud(?:y|ies)|testimonial(?:s)?|partner(?:s)?|investor(?:s)?|ir\b|sustainability|csr|history|overview|mission|vision|values?)(?:\/|\.|\?|$)/i
 // URL segment patterns that strongly suggest a dedicated contact page
-const URL_SEGMENT_RE = /(?:^|\/)(contact|inquiry|toiawase|otoiawase|mailform|ask-us|askus|feedback|renraku|goiken|iawase|gorenraku|gosodan|soudan|meiru|consultation|message|contactus|contactform|inquiryform)(?:\/|\.|\?|_|-|$)/i
+const URL_SEGMENT_RE = /(?:^|\/)(contact|inquiry|enquiry|enquire|inquire|toiawase|otoiawase|mailform|ask-us|askus|feedback|renraku|goiken|iawase|gorenraku|gosodan|soudan|meiru|consultation|message|contactus|contactform|inquiryform|mailsend|sendmail|getintouch|get-in-touch|write-to-us|writeto)(?:\/|\.|\?|_|-|$)/i
 const URL_LOOSE_RE = /(?:%E3%81%8A%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B|%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B|%E3%81%94%E7%9B%B8%E8%AB%87|%E3%81%94%E9%80%A3%E7%B5%A1|cgi-bin|cgi\/)/i
 // LINE deep-link patterns — always valid contact method, skip HTTP validation
 const LINE_HINT_PATTERNS = [/lin\.ee\//i, /page\.line\.me\//i, /accountpage\.line\.me\//i, /liff\.line\.me\//i]
@@ -257,17 +257,31 @@ function stripHtmlTags(raw: string): string {
  * Extract text for GPT classification.
  * Prioritises content around the first <form> tag so GPT sees
  * the labels and headings that describe the form, not just the page header.
+ * Also prepends any <h1>/<h2> heading text from the page to give GPT page-level context.
  */
 function cleanHtmlToText(html: string): string {
+  // Extract the page heading (h1/h2) — gives GPT a strong signal about the page purpose
+  const headings: string[] = []
+  const headingRe = /<h[12][^>]*>([\s\S]*?)<\/h[12]>/gi
+  let hm: RegExpExecArray | null
+  while ((hm = headingRe.exec(html)) !== null && headings.length < 3) {
+    const text = hm[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+    if (text) headings.push(text)
+  }
+
   const formIdx = html.toLowerCase().indexOf('<form')
   if (formIdx !== -1) {
     // Take 1 500 chars before the form (for headings/breadcrumbs) + 2 500 after
     const start = Math.max(0, formIdx - 1500)
     const end = Math.min(html.length, formIdx + 2500)
     const segment = html.slice(start, end)
-    return stripHtmlTags(segment).slice(0, 3000)
+    const body = stripHtmlTags(segment).slice(0, 2700)
+    const header = headings.join(' / ')
+    return header ? `${header}\n${body}` : body
   }
-  return stripHtmlTags(html).slice(0, 3000)
+  const body = stripHtmlTags(html).slice(0, 2700)
+  const header = headings.join(' / ')
+  return header ? `${header}\n${body}` : body
 }
 
 function extractTitle(html: string): string {
@@ -344,6 +358,8 @@ function extractForms(html: string, baseUrl: string): {
 
     // Reject links whose URL path clearly indicates non-contact content.
     if (NON_CONTACT_SUFFIX_RE.test(lUrl)) continue
+    // Reject links that point to thank-you / completion pages (not a form, already submitted)
+    if (/\/(thanks?|thankyou|thank[-_]you|complete[d]?|completion|sent|finish(?:ed)?|success|entry[-_]?complete)(?:\/|\.|\?|$)/i.test(lUrl)) continue
 
     let score = 0
     for (const kw of CONTACT_TEXT_KW) { if (lText.includes(kw.toLowerCase())) { score += 10; break } }
@@ -515,6 +531,10 @@ function _validateFormContext(formCtx: string): boolean {
 
   // Reject purchase / checkout forms — contact forms don't have cart, quantity, or payment context
   if (/数量|カート|ショッピング|購入する|ご購入|注文内容|決済|クレジットカード|お支払い方法|配送先住所/i.test(formCtx) &&
+      !/お問い合わせ|ご連絡|ご相談|inquiry|contact/i.test(formCtx)) return false
+
+  // Reject job application / recruitment forms — career pages have "職種", "志望動機", "履歴書", etc.
+  if (/志望動機|職種|採用.*フォーム|application form|job application|apply for|応募フォーム|履歴書/i.test(formCtx) &&
       !/お問い合わせ|ご連絡|ご相談|inquiry|contact/i.test(formCtx)) return false
 
   // Reject WordPress / blog CMS comment forms.
@@ -756,6 +776,14 @@ async function processItem(
           const normBase  = effectiveBase.replace(/\/$/, '').toLowerCase()
           if (normFinal === normBase) return null
         }
+
+        // Reject if the final URL path looks like a thank-you / completion page
+        // (e.g. the server auto-submitted and redirected — the "form" page is already gone)
+        const checkUrl = finalUrl || targetUrl
+        try {
+          const finalPath = new URL(checkUrl).pathname.toLowerCase()
+          if (/\/(thanks?|thankyou|thank[-_]you|complete[d]?|completion|sent|finish(?:ed)?|done|success|confirm(?:ation)?|entry[-_]?complete|sousin[-_]?kanryo|kanryo|okini[-_]nyuuri)(?:\/|\.|\?|$)/i.test(finalPath)) return null
+        } catch { /* ignore */ }
       }
       if (!html) return null
 
