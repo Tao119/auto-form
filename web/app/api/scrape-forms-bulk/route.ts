@@ -848,6 +848,26 @@ async function processItem(
     // Pre-compute HP text prefix for soft-404 detection (same content served at all paths)
     const hpTextPrefix = hpFetch.html.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().slice(0, 400)
 
+    // CMS detection: filter out irrelevant probe paths and prioritize site-appropriate ones.
+    // Shopify: no CGI, no PHP, only /pages/* routes work.
+    // WordPress: /pages/* won't work, but /contact, /contact-us, and /contact-form do.
+    const isShopify = /cdn\.shopify\.com|shopify\.com\/s\/files/.test(hpFetch.html)
+    const isWordPress = /wp-content\/|wp-includes\/|xmlrpc\.php/.test(hpFetch.html)
+
+    const shouldProbe = (suffix: string): boolean => {
+      if (isShopify) {
+        // Shopify only serves routes under /pages/ — skip CGI, PHP, HTML-extension paths
+        if (/\.(cgi|pl|php|html?)(\?|$)/i.test(suffix)) return false
+        if (/\/cgi(-bin)?\//.test(suffix)) return false
+        if (/\/mail\.|\/send\.|\/post\.|\/form\./i.test(suffix)) return false
+      }
+      if (isWordPress) {
+        // WordPress doesn't have /pages/* routes (that's Shopify's pattern)
+        if (suffix.startsWith('/pages/')) return false
+      }
+      return true
+    }
+
     // Build set of URL paths already tried as contact link candidates — skip duplicates in probe loop
     // Normalize to remove trailing slashes so /contact and /contact/ are treated as the same path
     const triedPaths = new Set<string>()
@@ -858,6 +878,8 @@ async function processItem(
     let probed = 0
     for (const suffix of PROBE_PATHS) {
       if (probed >= PROBE_LIMIT) break
+      // Skip paths irrelevant for detected CMS
+      if (!shouldProbe(suffix)) continue
       // Skip paths already tried as contact link candidates (normalize trailing slashes)
       const normSuffix = suffix.toLowerCase().replace(/\/$/, '')
       if (triedPaths.has(normSuffix)) continue
