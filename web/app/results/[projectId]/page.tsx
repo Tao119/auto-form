@@ -337,20 +337,29 @@ export default function ProjectResultsPage() {
               </option>
             ))}
           </select>
-          <div className="flex gap-2">
-            <select
-              value={filters.hasForm}
-              onChange={(e) => setFilters({ ...filters, hasForm: e.target.value })}
-              className="flex-1 bg-white border border-gray-300 rounded px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none"
-            >
-              <option value="">フォーム: 全て</option>
-              <option value="true">フォームあり</option>
-              <option value="false">フォームなし</option>
-            </select>
+          <div className="flex items-center gap-1">
+            {/* hasForm quick toggle buttons */}
+            {(['', 'true', 'false'] as const).map((val) => {
+              const label = val === '' ? 'フォーム:全て' : val === 'true' ? 'あり' : 'なし'
+              const active = filters.hasForm === val
+              return (
+                <button
+                  key={val}
+                  onClick={() => setFilters({ ...filters, hasForm: val })}
+                  className={`text-xs px-2.5 py-2 rounded border transition-colors whitespace-nowrap ${
+                    active
+                      ? 'bg-blue-600 border-blue-600 text-white'
+                      : 'bg-white border-gray-300 text-gray-600 hover:border-gray-400'
+                  }`}
+                >
+                  {label}
+                </button>
+              )
+            })}
             {hasFilters && (
               <button
                 onClick={clearFilters}
-                className="p-2 text-gray-400 hover:text-gray-600 border border-gray-300 rounded transition-colors bg-white"
+                className="ml-1 p-2 text-gray-400 hover:text-gray-600 border border-gray-300 rounded transition-colors bg-white"
                 title="フィルターをクリア"
               >
                 <X className="w-4 h-4" />
