@@ -1003,7 +1003,7 @@ async function processItem(
 
       // 2. Same page title as homepage OR explicit 404/not-found title
       const probeTitle = extractTitle(probeHtml).trim().toLowerCase()
-      const probeIs404 = /\b404\b|not.?found|ページが見つかりません|お探しのページ.*見つかりません|ページが存在しません/i.test(probeTitle)
+      const probeIs404 = /\b404\b|not.?found|ページが見つかりません|お探しのページ.*見つかりません|ページが存在しません|エラーが発生|お探しのページ|ご指定.*ページ.*存在/i.test(probeTitle)
       if (hpTitle && probeTitle && (probeTitle === hpTitle || probeIs404)) { consecutiveSoft404s++; continue }
       // Also catch generic "not found" title regardless of HP title
       if (probeIs404) { consecutiveSoft404s++; continue }
@@ -1025,7 +1025,7 @@ async function processItem(
       // 6. Body text opens with a "page not found" message (custom 200 soft-404 pages)
       //    Check only the first 600 chars of stripped text to avoid false negatives on valid pages
       //    that discuss 404 errors tangentially.
-      if (/お探しのページ.*見つかり|このページ.*存在しません|ページが見つかりません|存在しないページ|page not found|404 error/i.test(probeText.slice(0, 600))) { consecutiveSoft404s++; continue }
+      if (/お探しのページ.*見つかり|このページ.*存在しません|ページが見つかりません|存在しないページ|page not found|404 error|ご指定のページ.*見つかり|お探しのページは.*見つかりません|ページが見つかりません/i.test(probeText.slice(0, 600))) { consecutiveSoft404s++; continue }
       // ───────────────────────────────────────────────────────────────
 
       // A page that passed all soft-404 checks resets the consecutive counter
