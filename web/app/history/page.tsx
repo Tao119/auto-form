@@ -1,10 +1,11 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   CheckCircle2, XCircle, Clock, AlertCircle, RefreshCw,
-  FolderOpen, ChevronRight, Play, Database, Zap, DollarSign, ListOrdered
+  FolderOpen, ChevronRight, Play, Database, Zap, DollarSign, ListOrdered,
+  Search, Filter,
 } from 'lucide-react'
 import type { ProjectRun } from '@/lib/types'
 
@@ -51,11 +52,22 @@ function timeAgo(iso: string) {
   return `${d}日前`
 }
 
+const STATUS_OPTIONS = [
+  { value: '', label: 'すべて' },
+  { value: 'running', label: '実行中' },
+  { value: 'pending', label: '待機中' },
+  { value: 'success', label: '成功' },
+  { value: 'completed', label: '完了' },
+  { value: 'error', label: 'エラー' },
+]
+
 export default function HistoryPage() {
   const router = useRouter()
   const [runs, setRuns] = useState<RunWithProject[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
 
   const load = async () => {
     setLoading(true)
@@ -118,13 +130,31 @@ export default function HistoryPage() {
     return () => clearTimeout(t)
   }, [runs])
 
+  const filteredRuns = useMemo(() => {
+    return runs.filter((r) => {
+      if (statusFilter && r.status !== statusFilter) return false
+      if (search) {
+        const q = search.toLowerCase()
+        if (!r.label.toLowerCase().includes(q) && !r.projectName.toLowerCase().includes(q)) return false
+      }
+      return true
+    })
+  }, [runs, search, statusFilter])
+
+  const runningCount = runs.filter((r) => r.status === 'running' || r.status === 'pending').length
+
   return (
     <div className="p-6 space-y-4 h-full flex flex-col">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-lg font-semibold text-gray-900">実行履歴</h1>
           <p className="text-sm text-gray-500 mt-1">
-            {loading ? '読み込み中...' : `${runs.length}件の実行`}
+            {loading ? '読み込み中...' : `${filteredRuns.length} / ${runs.length}件`}
+            {runningCount > 0 && (
+              <span className="ml-2 inline-flex items-center gap-1 text-xs text-blue-600">
+                <RefreshCw className="w-3 h-3 animate-spin" />{runningCount}件実行中
+              </span>
+            )}
           </p>
         </div>
         <button
@@ -135,6 +165,32 @@ export default function HistoryPage() {
           <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
           更新
         </button>
+      </div>
+
+      {/* Filters */}
+      <div className="flex gap-2 flex-wrap">
+        <div className="relative flex-1 min-w-[200px] max-w-xs">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="ラベル・プロジェクト名で検索..."
+            className="w-full pl-8 pr-3 py-1.5 text-sm bg-white border border-gray-300 rounded focus:outline-none focus:border-blue-400"
+          />
+        </div>
+        <div className="relative">
+          <Filter className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="pl-8 pr-8 py-1.5 text-sm bg-white border border-gray-300 rounded focus:outline-none focus:border-blue-400 appearance-none"
+          >
+            {STATUS_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {error && (
@@ -167,14 +223,14 @@ export default function HistoryPage() {
                   </td>
                 </tr>
               )}
-              {!loading && runs.length === 0 && (
+              {!loading && filteredRuns.length === 0 && (
                 <tr>
                   <td colSpan={8} className="px-4 py-12 text-center text-gray-400">
-                    実行履歴がありません
+                    {runs.length === 0 ? '実行履歴がありません' : '条件に一致する実行がありません'}
                   </td>
                 </tr>
               )}
-              {runs.map((run, i) => (
+              {filteredRuns.map((run, i) => (
                 <tr
                   key={run.id}
                   className={`border-b border-gray-100 hover:bg-gray-50 transition-colors ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}`}
@@ -184,7 +240,7 @@ export default function HistoryPage() {
                     <div className="flex items-center gap-2">
                       {run.status === 'running'
                         ? <Play className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" />
-                        : run.status === 'success'
+                        : run.status === 'success' || run.status === 'completed'
                         ? <CheckCircle2 className="w-3.5 h-3.5 text-green-600 flex-shrink-0" />
                         : run.status === 'error'
                         ? <XCircle className="w-3.5 h-3.5 text-red-500 flex-shrink-0" />
@@ -216,23 +272,30 @@ export default function HistoryPage() {
 
                   {/* Status */}
                   <td className="px-4 py-3">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <StatusBadge status={run.status} />
-                      {run.status === 'running' && (
-                        <button
-                          onClick={() => cancelRun(run.id)}
-                          className="text-xs px-1.5 py-0.5 rounded border border-gray-300 text-gray-500 hover:text-red-600 hover:border-red-300 transition-colors"
-                        >
-                          キャンセル
-                        </button>
-                      )}
-                      {run.status === 'error' && (
-                        <button
-                          onClick={() => retryRun(run)}
-                          className="text-xs px-1.5 py-0.5 rounded border border-gray-300 text-gray-500 hover:text-blue-600 hover:border-blue-300 transition-colors"
-                        >
-                          再実行
-                        </button>
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <StatusBadge status={run.status} />
+                        {run.status === 'running' && (
+                          <button
+                            onClick={() => cancelRun(run.id)}
+                            className="text-xs px-1.5 py-0.5 rounded border border-gray-300 text-gray-500 hover:text-red-600 hover:border-red-300 transition-colors"
+                          >
+                            キャンセル
+                          </button>
+                        )}
+                        {run.status === 'error' && (
+                          <button
+                            onClick={() => retryRun(run)}
+                            className="text-xs px-1.5 py-0.5 rounded border border-gray-300 text-gray-500 hover:text-blue-600 hover:border-blue-300 transition-colors"
+                          >
+                            再実行
+                          </button>
+                        )}
+                      </div>
+                      {run.status === 'error' && run.error && (
+                        <div className="text-xs text-red-500 max-w-[200px] truncate" title={run.error}>
+                          {run.error}
+                        </div>
                       )}
                     </div>
                   </td>

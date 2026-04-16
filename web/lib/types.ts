@@ -92,6 +92,8 @@ export interface ProjectRun {
   results?: BenchmarkResults
   // Queue
   queuePosition?: number  // 1-based position in waiting queue; undefined = not queued
+  // Error info (populated when status = 'error')
+  error?: string
 }
 
 // ─── Queue types ──────────────────────────────────────────────

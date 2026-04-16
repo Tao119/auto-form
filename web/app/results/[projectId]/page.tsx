@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import {
   ArrowLeft, Download, Search, RefreshCw, X,
-  CheckCircle, XCircle, Clock, Play, FolderOpen
+  CheckCircle, XCircle, Clock, Play, FolderOpen, Copy, Check,
 } from 'lucide-react'
 import type { CompanyRow, Project, ProjectRun } from '@/lib/types'
 
@@ -401,28 +401,34 @@ export default function ProjectResultsPage() {
                     </td>
                     <td className="px-3 py-2.5 text-gray-600 whitespace-nowrap">{row['業種'] || '-'}</td>
                     <td className="px-3 py-2.5 text-gray-600 whitespace-nowrap">{row['エリア'] || '-'}</td>
-                    <td className="px-3 py-2.5 max-w-[180px]">
+                    <td className="px-3 py-2.5 max-w-[200px]">
                       {row['HP URL'] ? (
-                        <a href={row['HP URL']} target="_blank" rel="noreferrer"
-                          className="text-blue-600 hover:text-blue-800 truncate block text-xs"
-                          title={row['HP URL']}>
-                          {row['HP URL'].replace(/^https?:\/\//, '').slice(0, 35)}
-                        </a>
+                        <div className="flex items-center group">
+                          <a href={row['HP URL']} target="_blank" rel="noreferrer"
+                            className="text-blue-600 hover:text-blue-800 truncate text-xs"
+                            title={row['HP URL']}>
+                            {row['HP URL'].replace(/^https?:\/\//, '').slice(0, 35)}
+                          </a>
+                          <CopyButton text={row['HP URL']} />
+                        </div>
                       ) : <span className="text-gray-400">-</span>}
                     </td>
-                    <td className="px-3 py-2.5 max-w-[180px]">
+                    <td className="px-3 py-2.5 max-w-[200px]">
                       {row['フォームURL'] ? (
-                        <a href={row['フォームURL']} target="_blank" rel="noreferrer"
-                          className={`truncate block text-xs ${
-                            row['フォーム種別'] === 'LINE'
-                              ? 'text-orange-600 hover:text-orange-800'
-                              : row['フォーム種別'] === 'booking'
-                              ? 'text-purple-600 hover:text-purple-800'
-                              : 'text-green-700 hover:text-green-900'
-                          }`}
-                          title={row['フォームURL']}>
-                          {row['フォームURL'].replace(/^https?:\/\//, '').slice(0, 35)}
-                        </a>
+                        <div className="flex items-center group">
+                          <a href={row['フォームURL']} target="_blank" rel="noreferrer"
+                            className={`truncate text-xs ${
+                              row['フォーム種別'] === 'LINE'
+                                ? 'text-orange-600 hover:text-orange-800'
+                                : row['フォーム種別'] === 'booking'
+                                ? 'text-purple-600 hover:text-purple-800'
+                                : 'text-green-700 hover:text-green-900'
+                            }`}
+                            title={row['フォームURL']}>
+                            {row['フォームURL'].replace(/^https?:\/\//, '').slice(0, 35)}
+                          </a>
+                          <CopyButton text={row['フォームURL']} />
+                        </div>
                       ) : (
                         <span className="text-xs text-amber-500 italic">未検出</span>
                       )}
@@ -472,6 +478,30 @@ export default function ProjectResultsPage() {
         )}
       </div>
     </div>
+  )
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }).catch(() => {})
+  }
+  return (
+    <button
+      onClick={handleCopy}
+      className="ml-1 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded text-gray-400 hover:text-gray-700 flex-shrink-0"
+      title="URLをコピー"
+    >
+      {copied
+        ? <Check className="w-3 h-3 text-green-600" />
+        : <Copy className="w-3 h-3" />
+      }
+    </button>
   )
 }
 

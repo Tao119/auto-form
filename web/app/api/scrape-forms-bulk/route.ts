@@ -284,6 +284,18 @@ function validateFormPage(html: string): boolean {
   return hasContactInput && hasSubmit && hasContactKw
 }
 
+/**
+ * Common contact page paths to probe when no form link is found via link extraction.
+ * Ordered by likelihood. We try at most PROBE_LIMIT paths to keep latency bounded.
+ */
+const PROBE_PATHS = [
+  '/contact', '/inquiry', '/otoiawase', '/toiawase', '/mailform',
+  '/form', '/contact.html', '/inquiry.html', '/contact.php', '/inquiry.php',
+  '/contact/', '/inquiry/', '/otoiawase/', '/toiawase/',
+  '/contact/index.html', '/inquiry/index.html',
+]
+const PROBE_LIMIT = 4  // max paths to probe per site
+
 async function processItem(
   url: string,
   baseUrl: string,
@@ -309,26 +321,26 @@ async function processItem(
   let formPageText: string | null = null
   let formPageTitle: string | null = null
 
+  const tryFetchAndValidate = async (targetUrl: string, cachedHtml: string | null): Promise<{ html: string; valid: boolean } | null> => {
+    try {
+      let html: string
+      if (cachedHtml !== null) {
+        html = cachedHtml
+      } else {
+        const result = await fetchUrl(targetUrl, timeoutMs)
+        // Reject 4xx/5xx responses (broken links, access-denied, etc.)
+        if (result.statusCode && result.statusCode >= 400) return null
+        html = result.html
+      }
+      if (!html) return null
+      return { html, valid: validateFormPage(html) }
+    } catch { return null }
+  }
+
   if (fetchFormPage && extracted.formUrl && extracted.hasContactLink) {
     // If formUrl is the HP itself (inline form), reuse the already-fetched HTML
     const isInlinePage = extracted.formUrl === baseUrl
     const formHtml = isInlinePage ? hpFetch.html : null
-
-    const tryFetchAndValidate = async (targetUrl: string, cachedHtml: string | null): Promise<{ html: string; valid: boolean } | null> => {
-      try {
-        let html: string
-        if (cachedHtml !== null) {
-          html = cachedHtml
-        } else {
-          const result = await fetchUrl(targetUrl, timeoutMs)
-          // Reject 4xx/5xx responses (broken links, access-denied, etc.)
-          if (result.statusCode && result.statusCode >= 400) return null
-          html = result.html
-        }
-        if (!html) return null
-        return { html, valid: validateFormPage(html) }
-      } catch { return null }
-    }
 
     const primary = await tryFetchAndValidate(extracted.formUrl, formHtml)
 
@@ -357,6 +369,33 @@ async function processItem(
           formPageText = cleanHtmlToText(primary.html)
           formPageTitle = extractTitle(primary.html)
         }
+      }
+    }
+  }
+
+  // Step 4 (precision boost): if still no form found, probe common contact paths
+  if (fetchFormPage && !extracted.hasContactLink) {
+    let baseOrigin: string
+    try { baseOrigin = new URL(baseUrl).origin } catch { return { url, baseUrl, ...extracted, formPageText, formPageTitle, error: null } }
+
+    let probed = 0
+    for (const suffix of PROBE_PATHS) {
+      if (probed >= PROBE_LIMIT) break
+      const probeUrl = baseOrigin + suffix
+      probed++
+      const result = await tryFetchAndValidate(probeUrl, null)
+      if (result?.valid) {
+        extracted.formUrl = probeUrl
+        extracted.hasContactLink = true
+        formPageText = cleanHtmlToText(result.html)
+        formPageTitle = extractTitle(result.html)
+        // Also try to extract phone/email from the contact page if not found yet
+        if (!extracted.phone || !extracted.email) {
+          const extras = extractForms(result.html, probeUrl)
+          if (!extracted.phone && extras.phone) extracted.phone = extras.phone
+          if (!extracted.email && extras.email) extracted.email = extras.email
+        }
+        break
       }
     }
   }

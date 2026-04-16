@@ -93,6 +93,7 @@ export async function POST(
       completedAt: new Date().toISOString(),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       results: body.results as any,
+      error: body.status === 'error' ? (body.error ?? 'Unknown error') : undefined,
     })
 
     // Trigger next queued job

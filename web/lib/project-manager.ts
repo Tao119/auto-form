@@ -115,6 +115,7 @@ export interface RunStatusUpdate {
   completedAt?: string
   rawSearchCount?: number
   results?: import('./types').BenchmarkResults
+  error?: string
 }
 
 /**
@@ -155,5 +156,6 @@ export function updateRunStatus(
   if (extra?.completedAt !== undefined) run.completedAt = extra.completedAt
   if (extra?.rawSearchCount !== undefined) run.rawSearchCount = extra.rawSearchCount
   if (extra?.results !== undefined) run.results = extra.results
+  if (extra?.error !== undefined) run.error = extra.error
   writeData(data)
 }
