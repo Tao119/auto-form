@@ -602,11 +602,12 @@ export default function ProjectResultsPage() {
               {rows.map((row, i) => {
                 const run = project.runs.find((r) => r.id === row['実行ID'])
                 const isSelected = row.id ? selectedIds.has(row.id) : false
+                const noForm = !row['フォームURL']
                 return (
                   <tr
                     key={i}
                     className={`border-b border-gray-100 hover:bg-gray-50 transition-colors ${
-                      isSelected ? 'bg-blue-50/60' : i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
+                      isSelected ? 'bg-blue-50/60' : noForm ? 'opacity-60' : i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
                     }`}
                   >
                     <td className="px-3 py-2.5">
