@@ -57,6 +57,7 @@ export interface CompanyFilters {
   formType?: string
   search?: string  // searches name, hpUrl, formUrl
   hasForm?: string // 'true' = formUrl != '', 'false' = formUrl = ''
+  ids?: string[]   // filter by specific company IDs (for selective export)
   sortBy?: CompanySortBy
   sortDir?: CompanySortDir
   limit?: number
@@ -188,6 +189,9 @@ export function getCompanies(filters?: CompanyFilters): Company[] {
   if (filters?.hasForm === 'true')  clauses.push("formUrl != ''")
   if (filters?.hasForm === 'false') clauses.push("formUrl = ''")
 
+  // IDs filter: uses positional params since IN clause doesn't work with named params
+  const idsFilter = filters?.ids?.length ? filters.ids : null
+
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
   const limitClause = filters?.limit !== undefined ? `LIMIT @limit OFFSET @offset` : ''
   if (filters?.limit !== undefined) {
@@ -199,6 +203,12 @@ export function getCompanies(filters?: CompanyFilters): Company[] {
   const ALLOWED_SORT: ReadonlySet<string> = new Set(['collectedAt', 'name', 'industry', 'area', 'status', 'formType'])
   const sortCol = filters?.sortBy && ALLOWED_SORT.has(filters.sortBy) ? filters.sortBy : 'collectedAt'
   const sortDir = filters?.sortDir === 'ASC' ? 'ASC' : 'DESC'
+
+  if (idsFilter) {
+    const placeholders = idsFilter.map(() => '?').join(',')
+    const idsWhere = clauses.length ? `${where} AND id IN (${placeholders})` : `WHERE id IN (${placeholders})`
+    return db.prepare(`SELECT * FROM companies ${idsWhere} ORDER BY ${sortCol} ${sortDir}`).all([...Object.values(params), ...idsFilter]) as Company[]
+  }
 
   return db.prepare(`SELECT * FROM companies ${where} ORDER BY ${sortCol} ${sortDir} ${limitClause}`).all(params) as Company[]
 }

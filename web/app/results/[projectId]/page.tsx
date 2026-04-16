@@ -253,6 +253,10 @@ export default function ProjectResultsPage() {
       if (filters.search) params.set('search', filters.search)
       params.set('sortBy', sortBy)
       params.set('sortDir', sortDir)
+      // When rows are selected, export only those IDs
+      if (selectedIds.size > 0) {
+        params.set('ids', Array.from(selectedIds).join(','))
+      }
       const res = await fetch(`/api/sheets/export?${params}`)
       if (!res.ok) throw new Error('エクスポート失敗')
       const blob = await res.blob()
@@ -396,7 +400,7 @@ export default function ProjectResultsPage() {
             className="flex items-center gap-1 text-xs bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white rounded px-3 py-1.5 transition-colors"
           >
             <Download className="w-3 h-3" />
-            {exporting ? 'エクスポート中...' : 'CSV出力'}
+            {exporting ? 'エクスポート中...' : selectedIds.size > 0 ? `選択(${selectedIds.size})をCSV出力` : 'CSV出力'}
           </button>
         </div>
       </div>

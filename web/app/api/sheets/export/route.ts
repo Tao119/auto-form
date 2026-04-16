@@ -41,6 +41,9 @@ export async function GET(req: NextRequest) {
   const projectId = searchParams.get('projectId') || undefined
   const runId = searchParams.get('runId') || undefined
 
+  const idsParam = searchParams.get('ids')
+  const ids = idsParam ? idsParam.split(',').filter(Boolean) : undefined
+
   const filters = {
     projectId,
     runId,
@@ -52,6 +55,7 @@ export async function GET(req: NextRequest) {
     hasForm:  searchParams.get('hasForm') || undefined,
     sortBy:   (searchParams.get('sortBy') || 'collectedAt') as import('@/lib/companies-db').CompanySortBy,
     sortDir:  (searchParams.get('sortDir') === 'ASC' ? 'ASC' : 'DESC') as import('@/lib/companies-db').CompanySortDir,
+    ids,
   }
 
   try {
