@@ -137,7 +137,7 @@ export async function POST(req: NextRequest) {
   if (_activeFetches >= MAX_CONCURRENT_FETCHES) {
     return NextResponse.json(
       { success: false, error: 'Server busy — too many concurrent fetch jobs. Retry in a few seconds.' },
-      { status: 429 }
+      { status: 429, headers: { 'Retry-After': '5' } }
     )
   }
   _activeFetches++

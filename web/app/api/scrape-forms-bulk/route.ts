@@ -381,9 +381,13 @@ function extractForms(html: string, baseUrl: string): {
   }
   links.sort((a, b) => b.score - a.score)
   // Deduplicate by URL (same contact page often linked from nav + footer — keep highest score)
+  // Normalize: strip trailing slash AND collapse http/https + www variants so
+  // "https://www.example.com/contact" and "http://example.com/contact" are treated as the same page.
   const _seenLinkUrls = new Set<string>()
   const uniqueLinks = links.filter((l) => {
-    const k = l.url.toLowerCase().replace(/\/$/, '')
+    const k = l.url.toLowerCase()
+      .replace(/\/$/, '')
+      .replace(/^https?:\/\/(www\.)?/, '')
     if (_seenLinkUrls.has(k)) return false
     _seenLinkUrls.add(k)
     return true
@@ -665,6 +669,18 @@ async function processItem(
 
   const tryFetchAndValidate = async (targetUrl: string, cachedHtml: string | null): Promise<{ html: string; valid: boolean; finalUrl?: string } | null> => {
     try {
+      // Fast-pass: known external form service URL — no network fetch required.
+      // These services are always valid contact forms and often render via JavaScript
+      // so fetching would return empty or partially-rendered HTML.
+      if (cachedHtml === null) {
+        try {
+          const targetHost = new URL(targetUrl).hostname.replace(/^www\./, '')
+          if (EXTERNAL_FORM_HOSTS.some((h) => targetHost === h || targetHost.endsWith('.' + h))) {
+            return { html: '', valid: true }
+          }
+        } catch { /* ignore malformed URL */ }
+      }
+
       let html: string
       let finalUrl: string | undefined
       if (cachedHtml !== null) {
@@ -681,6 +697,10 @@ async function processItem(
           try {
             const finalHost = new URL(finalUrl).hostname.replace(/^www\./, '')
             if (REDIRECT_REJECT_HOSTS.some((h) => finalHost === h || finalHost.endsWith('.' + h))) return null
+            // Also fast-pass if it redirected to another known external form service
+            if (EXTERNAL_FORM_HOSTS.some((h) => finalHost === h || finalHost.endsWith('.' + h))) {
+              return { html: '', valid: true, finalUrl }
+            }
           } catch { /* ignore */ }
         }
 
@@ -891,7 +911,7 @@ export async function POST(req: NextRequest) {
   if (_activeBatches >= MAX_CONCURRENT_BATCHES) {
     return NextResponse.json(
       { success: false, error: 'Server busy — too many concurrent scraping jobs. Retry in a few seconds.' },
-      { status: 429 }
+      { status: 429, headers: { 'Retry-After': '5' } }
     )
   }
   _activeBatches++
