@@ -633,6 +633,14 @@ async function processItem(
       const probeFinalNorm = (probeResult.finalUrl || probeUrl).replace(/\/$/, '').toLowerCase()
       if (probeFinalNorm === hpNorm) continue
 
+      // 1b. Final URL redirected to a booking/SNS service — reject
+      if (probeResult.finalUrl && probeResult.finalUrl !== probeUrl) {
+        try {
+          const finalHost = new URL(probeResult.finalUrl).hostname.replace(/^www\./, '')
+          if (REDIRECT_REJECT_HOSTS.some((h) => finalHost === h || finalHost.endsWith('.' + h))) continue
+        } catch { /* ignore */ }
+      }
+
       // 2. Same page title as homepage → likely same content served at every path
       const probeTitle = extractTitle(probeHtml).trim().toLowerCase()
       if (hpTitle && probeTitle && probeTitle === hpTitle) continue
