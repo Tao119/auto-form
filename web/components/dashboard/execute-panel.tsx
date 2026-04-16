@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import dynamic from 'next/dynamic'
-import { Play, Loader2, CheckCircle2, XCircle, ChevronDown, Plus, FolderOpen, Database, X, Map, List, Hash } from 'lucide-react'
+import { Play, Loader2, CheckCircle2, XCircle, ChevronDown, Plus, FolderOpen, Database, X, Map, List, Hash, ExternalLink } from 'lucide-react'
+import { useRouter } from 'next/navigation'
 import type { Preset, Project, SearchMode } from '@/lib/types'
 import { ProjectCreateModal } from '@/components/modals/project-create-modal'
 import type { MapPickerValue } from './map-picker'
@@ -59,6 +60,7 @@ function generateRunId() {
 }
 
 export default function ExecutePanel() {
+  const router = useRouter()
   const [searchMode, setSearchMode] = useState<SearchMode>('prefecture')
   const [industry, setIndustry] = useState('美容室')
   const [customIndustry, setCustomIndustry] = useState('')
@@ -758,11 +760,28 @@ export default function ExecutePanel() {
 
         {/* Result summary */}
         {status === 'success' && itemsWritten > 0 && (
-          <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded px-3 py-2">
-            <Database className="w-3.5 h-3.5 text-green-600 flex-shrink-0" />
-            <span className="text-green-700 text-xs font-medium">
-              {itemsWritten.toLocaleString()}件 をプロジェクトに追加しました
-            </span>
+          <div className="flex items-center justify-between gap-2 bg-green-50 border border-green-200 rounded px-3 py-2">
+            <div className="flex items-center gap-2">
+              <Database className="w-3.5 h-3.5 text-green-600 flex-shrink-0" />
+              <span className="text-green-700 text-xs font-medium">
+                {itemsWritten.toLocaleString()}件 をプロジェクトに追加しました
+              </span>
+              {firstItemTimeRef.current && (() => {
+                const elapsedMin = (Date.now() - firstItemTimeRef.current) / 60000
+                const rate = elapsedMin > 0.5 ? Math.round(itemsWritten / elapsedMin) : null
+                return rate !== null ? (
+                  <span className="text-green-500 text-xs">({rate.toLocaleString()}件/分)</span>
+                ) : null
+              })()}
+            </div>
+            {selectedProjectId && (
+              <button
+                onClick={() => router.push(`/results/${selectedProjectId}`)}
+                className="flex items-center gap-1 text-xs text-green-700 hover:text-green-900 border border-green-300 hover:border-green-500 rounded px-2 py-0.5 transition-colors flex-shrink-0"
+              >
+                <ExternalLink className="w-3 h-3" /> 結果を見る
+              </button>
+            )}
           </div>
         )}
       </div>
