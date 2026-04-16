@@ -663,7 +663,15 @@ export default function ProjectResultsPage() {
                                 : 'text-green-700 hover:text-green-900'
                             }`}
                             title={row['フォームURL']}>
-                            {row['フォームURL'].replace(/^https?:\/\//, '').slice(0, 35)}
+                            {(() => {
+                              try {
+                                const u = new URL(row['フォームURL'])
+                                const host = u.hostname.replace(/^www\./, '')
+                                const path = u.pathname.replace(/\/+$/, '') || ''
+                                const short = path.length > 20 ? path.slice(0, 20) + '…' : path
+                                return host + short
+                              } catch { return row['フォームURL'].replace(/^https?:\/\//, '').slice(0, 35) }
+                            })()}
                           </a>
                           <CopyButton text={row['フォームURL']} />
                         </div>
