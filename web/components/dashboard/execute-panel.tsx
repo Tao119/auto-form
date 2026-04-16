@@ -112,9 +112,7 @@ export default function ExecutePanel() {
   const firstItemTimeRef = useRef<number | null>(null)
   const prevLiveCountRef = useRef<number>(0)
 
-  const selectedProject = projects.find((p) => p.id === selectedProjectId)
-  const projectIndustry = selectedProject?.industry  // fixed industry set on the project
-  const actualIndustry = projectIndustry ?? (industry === 'その他' ? customIndustry : industry)
+  const actualIndustry = industry === 'その他' ? customIndustry : industry
   const isRunning = status === 'running' || status === 'queued'
   const canExecute = !isRunning && !!actualIndustry && !!selectedProjectId &&
     (searchMode !== 'prefecture' || selectedAreas.length > 0) &&
@@ -137,18 +135,6 @@ export default function ExecutePanel() {
     if (!_settingsLoaded) return
     savePanelSettings({ searchMode, industry, customIndustry, selectedAreas, maxResults, selectedProjectId })
   }, [_settingsLoaded, searchMode, industry, customIndustry, selectedAreas, maxResults, selectedProjectId])
-
-  // When switching to a project that has a fixed industry, sync the industry selector
-  useEffect(() => {
-    if (!selectedProject?.industry) return
-    const ind = selectedProject.industry
-    if (INDUSTRIES.includes(ind)) {
-      setIndustry(ind)
-    } else {
-      setIndustry('その他')
-      setCustomIndustry(ind)
-    }
-  }, [selectedProject?.industry]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Close area dropdown on outside click
   useEffect(() => {
@@ -454,6 +440,8 @@ export default function ExecutePanel() {
     }
   }
 
+  const selectedProject = projects.find((p) => p.id === selectedProjectId)
+
   return (
     <>
     <ProjectCreateModal
@@ -590,31 +578,22 @@ export default function ExecutePanel() {
         {/* Industry */}
         <div>
           <label className="block text-xs text-gray-500 mb-1">業種</label>
-          {projectIndustry ? (
-            <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded text-sm text-blue-800">
-              <span className="font-medium">{projectIndustry}</span>
-              <span className="text-blue-400 text-xs">（PJで固定）</span>
-            </div>
-          ) : (
-            <>
-              <select
-                value={industry}
-                onChange={(e) => setIndustry(e.target.value)}
-                className="w-full bg-white border border-gray-300 rounded px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none"
-                disabled={isRunning}
-              >
-                {INDUSTRIES.map((i) => <option key={i}>{i}</option>)}
-              </select>
-              {industry === 'その他' && (
-                <input
-                  type="text"
-                  value={customIndustry}
-                  onChange={(e) => setCustomIndustry(e.target.value)}
-                  placeholder="業種を入力..."
-                  className="mt-1 w-full bg-white border border-gray-300 rounded px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none"
-                />
-              )}
-            </>
+          <select
+            value={industry}
+            onChange={(e) => setIndustry(e.target.value)}
+            className="w-full bg-white border border-gray-300 rounded px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none"
+            disabled={isRunning}
+          >
+            {INDUSTRIES.map((i) => <option key={i}>{i}</option>)}
+          </select>
+          {industry === 'その他' && (
+            <input
+              type="text"
+              value={customIndustry}
+              onChange={(e) => setCustomIndustry(e.target.value)}
+              placeholder="業種を入力..."
+              className="mt-1 w-full bg-white border border-gray-300 rounded px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none"
+            />
           )}
         </div>
 

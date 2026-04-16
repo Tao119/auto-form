@@ -76,7 +76,6 @@ export interface Project {
   id: string          // proj-YYYYMMDD-NNN
   name: string
   description?: string
-  industry?: string   // fixed industry for this project (optional; multi-industry if absent)
   createdAt: string
   runIds: string[]    // ordered list of run IDs
 }
