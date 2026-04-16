@@ -353,14 +353,16 @@ function extractForms(html: string, baseUrl: string): {
       if (/^(contact|inquiry|form|mail|toiawase|otoiawase)$/.test(linkSubdomain)) score += 8
     }
 
-    // Score boost for links that appear inside a <footer> element
-    // (contact links in footers are very common on Japanese business sites)
-    // We detect this by checking whether the link HTML appeared after a <footer> opening tag
+    // Score boost for links that appear inside a <footer> or <nav> element
+    // (contact links in footers are very common; nav-level contact links are also reliable)
     const linkPos = match.index ?? -1
     const beforeLink = html.slice(0, linkPos).toLowerCase()
     const lastFooterOpen  = beforeLink.lastIndexOf('<footer')
     const lastFooterClose = beforeLink.lastIndexOf('</footer')
     if (lastFooterOpen > lastFooterClose) score += 4  // inside a footer
+    const lastNavOpen  = beforeLink.lastIndexOf('<nav')
+    const lastNavClose = beforeLink.lastIndexOf('</nav')
+    if (lastNavOpen > lastNavClose) score += 2  // inside a nav
 
     // Require at least a URL keyword match (8) OR a strong text match (10) to accept
     if (score >= 8) links.push({ url: absoluteUrl, text: rawText.slice(0, 80), score })
@@ -526,7 +528,7 @@ function _validateFormContext(formCtx: string): boolean {
 function validateFormPage(html: string): boolean {
   // External form embeds always accepted — checks both fast-path (Google Forms, etc.) and
   // additional known form SaaS services that may appear in iframe src or form action attributes.
-  if (/docs\.google\.com\/forms|forms\.gle|form\.run|formrun\.com|typeform\.com|jotform\.com|tayori\.com|formstack\.com|formzu\.net|form\.kintoneapp|kintone\.com|freeml\.net|mailform\.jp|mfcontacts\.com|formmailer\.jp|tally\.so|paperform\.co|cognito-forms\.com|wufoo\.com|surveymonkey\.com|share\.hsforms\.com|forms\.hubspot\.com|share\.formsite\.com|app\.getresponse\.com|mailchimp\.com|zoho\.com/i.test(html)) return true
+  if (/docs\.google\.com\/forms|forms\.gle|form\.run|formrun\.com|typeform\.com|jotform\.com|tayori\.com|formstack\.com|formzu\.net|form\.kintoneapp|kintone\.com|freeml\.net|mailform\.jp|mfcontact\.com|mfcontacts\.com|formmailer\.jp|tally\.so|paperform\.co|cognito-forms\.com|wufoo\.com|surveymonkey\.com|share\.hsforms\.com|forms\.hubspot\.com|share\.formsite\.com|app\.getresponse\.com|mailchimp\.com|zoho\.com/i.test(html)) return true
   // LINE contact links — always valid contact method
   if (/lin\.ee\/|page\.line\.me\/|accountpage\.line\.me\/|liff\.line\.me\//i.test(html)) return true
 
@@ -573,19 +575,19 @@ const PROBE_PATHS = [
   '/contact/index.php',  '/inquiry/index.php',
   '/mailform/index.html', '/mailform/index.php',
   // PHP form handlers common on Japanese rental hosting
-  '/mail.php', '/send.php', '/post.php',
+  '/mail.php', '/send.php', '/post.php', '/form.html', '/form.php',
   // CGI patterns common on Japanese hosting (rental servers: lolipop, xserver, sakura)
   '/cgi-bin/contact.cgi', '/cgi-bin/inquiry.cgi', '/cgi-bin/form.cgi',
   '/cgi-bin/mailform.cgi', '/cgi-bin/contact.pl', '/cgi-bin/form.pl',
   '/cgi-bin/mail.cgi', '/cgi-bin/post.cgi',
   // WordPress / common CMS slugs
-  '/contact-us', '/contact-us/', '/get-in-touch', '/send-message',
+  '/contact-us', '/contact-us/', '/contact_us', '/contactus', '/get-in-touch', '/send-message',
   // URL-encoded Japanese paths
   '/%E3%81%8A%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B',  // /お問い合わせ
   '/%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B',            // /問い合わせ
   '/%E3%81%8A%E5%95%8F%E5%90%88%E3%81%9B',                     // /お問合せ
 ]
-const PROBE_LIMIT = 6  // max paths to probe per site
+const PROBE_LIMIT = 8  // max paths to probe per site
 
 async function processItem(
   url: string,
@@ -749,6 +751,8 @@ async function processItem(
     const hpTitle = extractTitle(hpFetch.html).trim().toLowerCase()
     const hpLen = hpFetch.html.length
     const hpNorm = effectiveBase.replace(/\/$/, '').toLowerCase()
+    // Pre-compute HP text prefix for soft-404 detection (same content served at all paths)
+    const hpTextPrefix = hpFetch.html.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().slice(0, 400)
 
     // Build set of URL paths already tried as contact link candidates — skip duplicates in probe loop
     // Normalize to remove trailing slashes so /contact and /contact/ are treated as the same path
@@ -760,8 +764,10 @@ async function processItem(
     let probed = 0
     for (const suffix of PROBE_PATHS) {
       if (probed >= PROBE_LIMIT) break
-      // Skip paths already tried as contact link candidates to avoid redundant fetches
-      if (triedPaths.has(suffix.toLowerCase())) continue
+      // Skip paths already tried as contact link candidates (normalize trailing slashes)
+      const normSuffix = suffix.toLowerCase().replace(/\/$/, '')
+      if (triedPaths.has(normSuffix)) continue
+      triedPaths.add(normSuffix)  // mark as tried so /contact and /contact/ don't both get probed
       probed++
       const probeUrl = baseOrigin + suffix
 
@@ -795,13 +801,16 @@ async function processItem(
       }
 
       // 4. Very short response (< 500 bytes stripped) → likely an error/redirect stub
-      const probeTextLen = probeHtml.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().length
-      if (probeTextLen < 500) continue
+      const probeText = probeHtml.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
+      if (probeText.length < 500) continue
+      // 5. Near-identical text content prefix to HP → CMS serving same page at all paths (soft-404)
+      if (hpTextPrefix.length > 100 && probeText.slice(0, 400) === hpTextPrefix) continue
       // ───────────────────────────────────────────────────────────────
 
       if (!validateFormPage(probeHtml)) continue
 
-      extracted.formUrl = probeUrl
+      // Use the canonical URL after redirect (e.g. /contact → /contact/index.php)
+      extracted.formUrl = (probeResult.finalUrl && probeResult.finalUrl !== probeUrl) ? probeResult.finalUrl : probeUrl
       extracted.hasContactLink = true
       formPageText = cleanHtmlToText(probeHtml)
       formPageTitle = probeTitle || extractTitle(probeHtml)
