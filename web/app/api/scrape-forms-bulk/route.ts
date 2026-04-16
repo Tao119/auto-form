@@ -54,6 +54,14 @@ const BOOKING_URL_HOSTS = [
   'tabelog.com','gnavi.co.jp','gurunavi.com',
   'tripadvisor.com','tripadvisor.jp',
   'yelp.com','retty.me','loco.yahoo.co.jp',
+  // Additional Japanese salon/beauty booking services
+  'salon-board.jp','salonconnect.jp',
+  'yoyakucast.com','reserve.relo-system.com',
+  'yoyaku.yahoo.co.jp',
+  'ozmall.co.jp','ozmall.co.jp',
+  // Restaurant / hotel booking
+  'venue-search.com',
+  'r.gnavi.co.jp',
 ]
 const EXTERNAL_FORM_HOSTS = [
   'docs.google.com','forms.gle',
