@@ -767,13 +767,32 @@ async function processItem(
         }
       }
       if (!validated) {
-        // No validated form found — discard
-        extracted.formUrl = null
-        extracted.hasContactLink = false
-        if (primary) {
-          // Still capture page text for diagnostics
-          formPageText = cleanHtmlToText(primary.html)
-          formPageTitle = extractTitle(primary.html)
+        // Last-chance fallback: if the HP itself has an inline form, validate it.
+        // This handles sites that have contact links pointing to broken/non-form pages
+        // but still embed a contact form directly on their homepage.
+        if (extracted.hasInlineForm) {
+          const hpValidated = validateFormPage(hpFetch.html)
+          if (hpValidated) {
+            extracted.formUrl = effectiveBase
+            extracted.hasContactLink = true
+            formPageText = cleanHtmlToText(hpFetch.html)
+            formPageTitle = extractTitle(hpFetch.html)
+            const hpExtras = extractForms(hpFetch.html, effectiveBase)
+            if (!extracted.phone && hpExtras.phone) extracted.phone = hpExtras.phone
+            if (!extracted.email && hpExtras.email) extracted.email = hpExtras.email
+            extracted.formTypeHint = hpExtras.formTypeHint || 'inquiry'
+            validated = true
+          }
+        }
+        if (!validated) {
+          // No validated form found — discard
+          extracted.formUrl = null
+          extracted.hasContactLink = false
+          if (primary) {
+            // Still capture page text for diagnostics
+            formPageText = cleanHtmlToText(primary.html)
+            formPageTitle = extractTitle(primary.html)
+          }
         }
       }
     }
