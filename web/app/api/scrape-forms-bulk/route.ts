@@ -8,7 +8,7 @@ import { z } from 'zod'
 // ── Global concurrency guard ───────────────────────────────────────
 // Allow at most MAX_CONCURRENT_BATCHES simultaneous scraping jobs to
 // prevent runaway memory / CPU usage when n8n fires multiple webhooks.
-const MAX_CONCURRENT_BATCHES = 2
+const MAX_CONCURRENT_BATCHES = 3
 let _activeBatches = 0
 
 // ── Per-IP sliding-window rate limiter ─────────────────────────────
@@ -16,7 +16,7 @@ let _activeBatches = 0
 // per client IP to prevent accidental or malicious abuse.
 // Using a Map keyed by IP with a list of timestamps for the sliding window.
 const RATE_LIMIT_WINDOW_MS = 60_000  // 1 minute
-const RATE_LIMIT_MAX       = 20      // max calls per minute per IP
+const RATE_LIMIT_MAX       = 60      // max calls per minute per IP (raised to handle concurrent n8n runs)
 const _rateMap = new Map<string, number[]>()
 
 function checkRateLimit(ip: string): { allowed: boolean; remaining: number; resetMs: number } {
@@ -190,7 +190,7 @@ const Schema = z.object({
   items: z.array(z.object({
     url: z.string(),       // HP URL to fetch
     baseUrl: z.string(),   // same as url (used as base for relative links)
-  })).min(1).max(500),    // safety cap: prevent OOM from oversized requests
+  })).min(1).max(3000),   // safety cap: prevent OOM from oversized requests (increased from 500 for large-prefecture runs)
   timeoutMs: z.number().int().min(1000).max(30000).default(8000),
   concurrency: z.number().int().min(1).max(100).default(30),
   fetchFormPage: z.boolean().default(true), // also fetch the detected form page
