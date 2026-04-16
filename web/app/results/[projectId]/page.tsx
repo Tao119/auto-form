@@ -343,9 +343,14 @@ export default function ProjectResultsPage() {
         </div>
       </div>
 
-      {/* Count */}
+      {/* Count + stats */}
       <div className="flex items-center justify-between text-xs text-gray-500">
         <span>{loading ? '読み込み中...' : `${meta.total.toLocaleString()}件`}</span>
+        {!loading && meta.total > 0 && (
+          <span className="text-gray-400">
+            p.{page} / {Math.ceil(meta.total / meta.limit)}
+          </span>
+        )}
       </div>
 
       {error && (
@@ -396,8 +401,13 @@ export default function ProjectResultsPage() {
                     key={i}
                     className={`border-b border-gray-100 hover:bg-gray-50 transition-colors ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}`}
                   >
-                    <td className="px-3 py-2.5 text-gray-800 font-medium max-w-[160px] truncate" title={row['会社名']}>
-                      {row['会社名'] || '-'}
+                    <td className="px-3 py-2.5 max-w-[160px]">
+                      <div className="font-medium text-gray-800 truncate" title={row['会社名']}>
+                        {row['会社名'] || '-'}
+                      </div>
+                      {row['電話番号'] && (
+                        <div className="text-xs text-gray-400 mt-0.5 truncate">{row['電話番号']}</div>
+                      )}
                     </td>
                     <td className="px-3 py-2.5 text-gray-600 whitespace-nowrap">{row['業種'] || '-'}</td>
                     <td className="px-3 py-2.5 text-gray-600 whitespace-nowrap">{row['エリア'] || '-'}</td>

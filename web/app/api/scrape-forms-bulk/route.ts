@@ -226,13 +226,19 @@ function extractForms(html: string, baseUrl: string): {
 
     let score = 0
     for (const kw of CONTACT_TEXT_KW) { if (lText.includes(kw.toLowerCase())) { score += 10; break } }
-    for (const kw of CONTACT_URL_KW) { if (lUrl.includes(kw.toLowerCase())) { score += 8; break } }
-    // Path segment must be exactly the keyword (word-boundary)
-    if (/\/(contact|inquiry|toiawase|otoiawase|mailform|feedback)(\/|\.|$|\?|_|-)/i.test(absoluteUrl)) score += 5
+
+    // URL path matching: require word boundaries to avoid false positives
+    // e.g. /contact, /contact.html, /contact/, /contact? but NOT /contactlist, /subcontract
+    const URL_SEGMENT_RE = /(?:^|\/)(contact|inquiry|toiawase|otoiawase|mailform|ask-us|askus|feedback|renraku|goiken)(?:\/|\.|\?|_|-|$)/i
+    const URL_LOOSE_RE = /(?:%E3%81%8A%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B|%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B|%E3%81%94%E7%9B%B8%E8%AB%87|cgi-bin|cgi\/)/i
+    if (URL_SEGMENT_RE.test(lUrl) || URL_LOOSE_RE.test(lUrl)) score += 8
+    // Japanese URL keywords (highly specific, substring match is safe)
+    if (lUrl.includes('お問い合わせ') || lUrl.includes('問い合わせ') || lUrl.includes('ご相談') || lUrl.includes('ご連絡')) score += 8
+    // CGI form pattern
     if (/\/cgi(-bin)?\/.*form/i.test(absoluteUrl)) score += 12
     if (isExternal) score += 15
 
-    // Require at least a URL keyword match (8) to avoid weak false positives
+    // Require at least a URL keyword match (8) OR a strong text match (10) to accept
     if (score >= 8) links.push({ url: absoluteUrl, text: rawText.slice(0, 80), score })
   }
   links.sort((a, b) => b.score - a.score)
@@ -273,10 +279,18 @@ function validateFormPage(html: string): boolean {
   const hasForm = /<form[\s>]/i.test(html)
   if (!hasForm) return false
 
-  // textarea is the strongest signal — almost all inquiry forms have a message field
-  if (/textarea/i.test(html)) return true
+  // textarea is the strongest signal — almost all inquiry forms have a message field.
+  // But only accept if a contact-related keyword is present nearby (avoids forum/review textareas)
+  if (/textarea/i.test(html)) {
+    const hasContactKwForTextarea = /お問い合わせ|ご連絡|ご相談|お問合|inquiry|contact|message|メッセージ|内容|ご内容|ご質問|お問い合わせ内容/i.test(html)
+    if (hasContactKwForTextarea) return true
+    // Textarea with no contact keyword: may be a review/forum form. Check for name + email fields.
+    const hasNameField = /<input[^>]+(name|type)=["']?(text|name|your-name)["']?/i.test(html)
+    const hasEmailField = /<input[^>]+type=["']?email/i.test(html)
+    if (hasNameField && hasEmailField) return true
+  }
 
-  // email/tel input + submit + contact keyword
+  // email/tel input + submit + contact keyword (form without textarea)
   const hasContactInput = /<input[^>]+type=["']?(email|tel)/i.test(html)
   const hasSubmit = /<(input|button)[^>]*type=["']?submit/i.test(html)
   const hasContactKw = /お問い合わせ|ご連絡|ご相談|inquiry|contact|message|send/i.test(html)
