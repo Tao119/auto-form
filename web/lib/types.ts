@@ -1,12 +1,13 @@
 export interface CompanyRow {
+  id?: string  // SQLite primary key (not in legacy Sheets rows)
   '会社名': string
   'HP URL': string
   'フォームURL': string
   '電話番号': string
   'メールアドレス': string
   '住所': string
-  '業種': string
   'エリア': string
+  '業種': string
   'フォーム種別': string
   '収集日時': string
   'ステータス': string

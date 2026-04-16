@@ -310,6 +310,22 @@ export function removeByRunId(runId: string): number {
   return result.changes
 }
 
+/** Update status of a single company. Returns true if found. */
+export function updateCompanyStatus(id: string, status: string): boolean {
+  const db = getDb()
+  const result = db.prepare('UPDATE companies SET status = @status WHERE id = @id').run({ id, status })
+  return result.changes > 0
+}
+
+/** Batch update status for multiple companies. Returns number of rows updated. */
+export function batchUpdateStatus(ids: string[], status: string): number {
+  if (ids.length === 0) return 0
+  const db = getDb()
+  const placeholders = ids.map(() => '?').join(',')
+  const result = db.prepare(`UPDATE companies SET status = ? WHERE id IN (${placeholders})`).run(status, ...ids)
+  return result.changes
+}
+
 /** @deprecated Use countCompanies instead */
 export function getCompanyCount(filters?: CompanyFilters): number {
   return countCompanies(filters)

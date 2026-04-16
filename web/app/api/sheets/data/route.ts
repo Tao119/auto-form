@@ -5,6 +5,7 @@ import type { CompanyRow } from '@/lib/types'
 
 function toRow(c: Company): CompanyRow {
   return {
+    id: c.id,
     '会社名': c.name,
     'HP URL': c.hpUrl,
     'フォームURL': c.formUrl,

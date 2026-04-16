@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getCompanies, addCompanies } from '@/lib/companies-db'
+import { getCompanies, addCompanies, updateCompanyStatus, batchUpdateStatus } from '@/lib/companies-db'
 import type { CompanyInput } from '@/lib/companies-db'
+import { z } from 'zod'
 
 // GET /api/companies?projectId=...&runId=...&industry=...&area=...
 // Returns filtered company list with total count
@@ -37,5 +38,28 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     return NextResponse.json({ success: false, error: msg }, { status: 500 })
+  }
+}
+
+const PatchSchema = z.union([
+  z.object({ id: z.string(), status: z.string() }),
+  z.object({ ids: z.array(z.string()).min(1), status: z.string() }),
+])
+
+// PATCH /api/companies
+// Body: { id: string, status: string } or { ids: string[], status: string }
+export async function PATCH(req: NextRequest) {
+  try {
+    const body = PatchSchema.parse(await req.json())
+    if ('ids' in body) {
+      const updated = batchUpdateStatus(body.ids, body.status)
+      return NextResponse.json({ success: true, updated })
+    } else {
+      const ok = updateCompanyStatus(body.id, body.status)
+      return NextResponse.json({ success: ok, updated: ok ? 1 : 0 })
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    return NextResponse.json({ success: false, error: msg }, { status: 400 })
   }
 }

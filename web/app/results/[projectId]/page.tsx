@@ -56,6 +56,8 @@ export default function ProjectResultsPage() {
   const [error, setError] = useState('')
   const [page, setPage] = useState(1)
   const [exporting, setExporting] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [batchUpdating, setBatchUpdating] = useState(false)
 
   // Debounce search input to avoid hammering the API on every keystroke
   useEffect(() => {
@@ -169,6 +171,44 @@ export default function ProjectResultsPage() {
 
   const clearFilters = () => setFilters({ industry: '', area: '', status: '', formType: '', hasForm: '', search: '' })
   const hasFilters = filters.industry || filters.area || filters.status || filters.formType || filters.hasForm || filters.search
+
+  const handleBatchStatusUpdate = async (newStatus: string) => {
+    if (selectedIds.size === 0) return
+    setBatchUpdating(true)
+    try {
+      const res = await fetch('/api/companies', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: Array.from(selectedIds), status: newStatus }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        setSelectedIds(new Set())
+        fetchData(page)
+      } else {
+        setError(data.error || '更新失敗')
+      }
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setBatchUpdating(false)
+    }
+  }
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === rows.filter((r) => r.id).length) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(rows.filter((r) => r.id).map((r) => r.id!)))
+    }
+  }
+
+  const toggleSelect = (id: string) => {
+    const next = new Set(selectedIds)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    setSelectedIds(next)
+  }
 
   if (projLoading) {
     return (
@@ -369,14 +409,48 @@ export default function ProjectResultsPage() {
         </div>
       </div>
 
-      {/* Count + stats */}
+      {/* Count + batch actions */}
       <div className="flex items-center justify-between text-xs text-gray-500">
         <span>{loading ? '読み込み中...' : `${meta.total.toLocaleString()}件`}</span>
-        {!loading && meta.total > 0 && (
-          <span className="text-gray-400">
-            p.{page} / {Math.ceil(meta.total / meta.limit)}
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {selectedIds.size > 0 && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-gray-600 font-medium">{selectedIds.size}件選択</span>
+              <button
+                onClick={() => handleBatchStatusUpdate('送信済み')}
+                disabled={batchUpdating}
+                className="text-xs px-2 py-1 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white rounded transition-colors"
+              >
+                送信済みにする
+              </button>
+              <button
+                onClick={() => handleBatchStatusUpdate('スキップ')}
+                disabled={batchUpdating}
+                className="text-xs px-2 py-1 bg-yellow-600 hover:bg-yellow-700 disabled:bg-gray-300 text-white rounded transition-colors"
+              >
+                スキップ
+              </button>
+              <button
+                onClick={() => handleBatchStatusUpdate('未送信')}
+                disabled={batchUpdating}
+                className="text-xs px-2 py-1 border border-gray-300 text-gray-600 hover:bg-gray-50 rounded transition-colors"
+              >
+                未送信に戻す
+              </button>
+              <button
+                onClick={() => setSelectedIds(new Set())}
+                className="text-xs text-gray-400 hover:text-gray-600"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+          {!loading && meta.total > 0 && (
+            <span className="text-gray-400">
+              p.{page} / {Math.ceil(meta.total / meta.limit)}
+            </span>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -391,6 +465,14 @@ export default function ProjectResultsPage() {
           <table className="w-full text-sm">
             <thead className="sticky top-0 z-10">
               <tr className="border-b border-gray-200 bg-gray-50">
+                <th className="px-3 py-3 w-8">
+                  <input
+                    type="checkbox"
+                    checked={rows.filter((r) => r.id).length > 0 && selectedIds.size === rows.filter((r) => r.id).length}
+                    onChange={toggleSelectAll}
+                    className="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  />
+                </th>
                 <th className="text-left px-3 py-3 text-xs text-gray-500 font-medium whitespace-nowrap">会社名</th>
                 <th className="text-left px-3 py-3 text-xs text-gray-500 font-medium whitespace-nowrap">業種</th>
                 <th className="text-left px-3 py-3 text-xs text-gray-500 font-medium whitespace-nowrap">エリア</th>
@@ -407,7 +489,7 @@ export default function ProjectResultsPage() {
             <tbody>
               {loading && rows.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="px-4 py-12 text-center text-gray-400">
+                  <td colSpan={10} className="px-4 py-12 text-center text-gray-400">
                     <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2" />
                     読み込み中...
                   </td>
@@ -415,18 +497,31 @@ export default function ProjectResultsPage() {
               )}
               {!loading && rows.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="px-4 py-12 text-center text-gray-400">
+                  <td colSpan={10} className="px-4 py-12 text-center text-gray-400">
                     データがありません
                   </td>
                 </tr>
               )}
               {rows.map((row, i) => {
                 const run = project.runs.find((r) => r.id === row['実行ID'])
+                const isSelected = row.id ? selectedIds.has(row.id) : false
                 return (
                   <tr
                     key={i}
-                    className={`border-b border-gray-100 hover:bg-gray-50 transition-colors ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}`}
+                    className={`border-b border-gray-100 hover:bg-gray-50 transition-colors ${
+                      isSelected ? 'bg-blue-50/60' : i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
+                    }`}
                   >
+                    <td className="px-3 py-2.5">
+                      {row.id && (
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleSelect(row.id!)}
+                          className="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                      )}
+                    </td>
                     <td className="px-3 py-2.5 max-w-[160px]">
                       <div className="font-medium text-gray-800 truncate" title={row['会社名']}>
                         {row['会社名'] || '-'}
