@@ -598,7 +598,7 @@ const PROBE_PATHS = [
   '/%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B',            // /問い合わせ
   '/%E3%81%8A%E5%95%8F%E5%90%88%E3%81%9B',                     // /お問合せ
 ]
-const PROBE_LIMIT = 8  // max paths to probe per site
+const PROBE_LIMIT = 10  // max paths to probe per site
 
 async function processItem(
   url: string,
@@ -805,9 +805,12 @@ async function processItem(
         } catch { /* ignore */ }
       }
 
-      // 2. Same page title as homepage → likely same content served at every path
+      // 2. Same page title as homepage OR explicit 404/not-found title
       const probeTitle = extractTitle(probeHtml).trim().toLowerCase()
-      if (hpTitle && probeTitle && probeTitle === hpTitle) continue
+      const probeIs404 = /\b404\b|not.?found|ページが見つかりません|お探しのページ.*見つかりません|ページが存在しません/i.test(probeTitle)
+      if (hpTitle && probeTitle && (probeTitle === hpTitle || probeIs404)) continue
+      // Also catch generic "not found" title regardless of HP title
+      if (probeIs404) continue
 
       // 3. Near-identical HTML length (within 3%) → likely same page (soft 404)
       if (hpLen > 200 && probeHtml.length > 200) {
@@ -815,9 +818,9 @@ async function processItem(
         if (lenRatio < 0.03) continue
       }
 
-      // 4. Very short response (< 500 bytes stripped) → likely an error/redirect stub
+      // 4. Very short response (< 300 bytes stripped) → likely an error/redirect stub
       const probeText = probeHtml.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
-      if (probeText.length < 500) continue
+      if (probeText.length < 300) continue
       // 5. Near-identical text content prefix to HP → CMS serving same page at all paths (soft-404)
       if (hpTextPrefix.length > 100 && probeText.slice(0, 400) === hpTextPrefix) continue
       // ───────────────────────────────────────────────────────────────
