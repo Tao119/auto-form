@@ -501,10 +501,12 @@ function _validateFormContext(formCtx: string): boolean {
     const hasTextInput = /<input[^>]+type=["']?text/i.test(formCtx)
     const hasSubmitFallback = /<(input|button)[^>]*type=["']?submit/i.test(formCtx)
     if (hasTextInput && hasEmailField && hasSubmitFallback) return true
-    // Relaxed: textarea + submit + 2+ text inputs → multi-field contact form
-    // (Handles old Japanese sites where email is type="text", not type="email")
+    // Relaxed: textarea + submit + 2+ text inputs + email-like field name
+    // (Handles old Japanese sites where email uses type="text" instead of type="email")
+    // Requiring an email-like field prevents reservation forms from matching.
+    const hasEmailLikeField = /<input[^>]+(name|id)=["']?(?:e-?mail|mail|メール|your.?mail|your.?email|yourmail)/i.test(formCtx)
     const textInputCount = (formCtx.match(/<input[^>]+type=["']?text/gi) || []).length
-    if (hasSubmitFallback && textInputCount >= 2) return true
+    if (hasSubmitFallback && textInputCount >= 2 && hasEmailLikeField) return true
   }
 
   // ── Email/tel + submit path ─────────────────────────────────────
