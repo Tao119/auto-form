@@ -922,9 +922,12 @@ async function processItem(
         if (lenRatio < 0.03) continue
       }
 
-      // 4. Very short response (< 300 bytes stripped) → likely an error/redirect stub
+      // 4. Very short response → likely an error/redirect stub.
+      //    SPA sites return a JS shell (~20-200 chars stripped) that is valid.
+      //    For non-SPA sites keep the 300 char threshold.
       const probeText = probeHtml.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
-      if (probeText.length < 300) continue
+      const minTextLen = isSpa ? 10 : 300
+      if (probeText.length < minTextLen) continue
       // 5. Near-identical text content prefix to HP → CMS serving same page at all paths (soft-404)
       if (hpTextPrefix.length > 100 && probeText.slice(0, 400) === hpTextPrefix) continue
       // 6. Body text opens with a "page not found" message (custom 200 soft-404 pages)
@@ -933,7 +936,10 @@ async function processItem(
       if (/お探しのページ.*見つかり|このページ.*存在しません|ページが見つかりません|存在しないページ|page not found|404 error/i.test(probeText.slice(0, 600))) continue
       // ───────────────────────────────────────────────────────────────
 
-      if (!validateFormPage(probeHtml)) continue
+      // SPA probe fallback: URL_SEGMENT_RE match is sufficient validation for JS-rendered sites
+      const probeValid = validateFormPage(probeHtml)
+        || (isSpa && URL_SEGMENT_RE.test(suffix) && probeText.length < 800)
+      if (!probeValid) continue
 
       // Use the canonical URL after redirect (e.g. /contact → /contact/index.php)
       extracted.formUrl = (probeResult.finalUrl && probeResult.finalUrl !== probeUrl) ? probeResult.finalUrl : probeUrl
