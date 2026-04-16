@@ -123,6 +123,7 @@ export default function ProjectResultsPage() {
   // Keyboard shortcuts:
   //   '/'       → focus search input
   //   Escape    → deselect all rows (when not in an input)
+  //   'a'       → select all rows on current page
   //   ArrowLeft → previous page
   //   ArrowRight→ next page
   useEffect(() => {
@@ -135,10 +136,16 @@ export default function ProjectResultsPage() {
       if (e.key === 'Escape' && !inInput && selectedIds.size > 0) {
         setSelectedIds(new Set())
       }
+      // 'a' key: select all rows on this page (hold Shift to deselect all)
+      if (e.key === 'a' && !e.metaKey && !e.ctrlKey && !e.shiftKey && !inInput) {
+        e.preventDefault()
+        const allIds = rows.filter((r) => r.id).map((r) => r.id!)
+        setSelectedIds(new Set(allIds))
+      }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [selectedIds])
+  }, [selectedIds, rows])
 
   // Debounce search input to avoid hammering the API on every keystroke
   useEffect(() => {
@@ -573,6 +580,11 @@ export default function ProjectResultsPage() {
           )}
         </span>
         <div className="flex items-center gap-2">
+          {selectedIds.size === 0 && rows.length > 0 && (
+            <span className="text-gray-400 text-xs hidden md:block" title="A キーで全行選択 / S: 送信済み / X: スキップ">
+              [A] 全選択 &nbsp;·&nbsp; [S] 送信済み &nbsp;·&nbsp; [X] スキップ &nbsp;·&nbsp; [/] 検索
+            </span>
+          )}
           {selectedIds.size > 0 && (
             <div className="flex items-center gap-1.5">
               <span className="text-gray-600 font-medium">{selectedIds.size}件選択</span>

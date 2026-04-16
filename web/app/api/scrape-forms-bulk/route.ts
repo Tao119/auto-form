@@ -73,7 +73,7 @@ const EXTERNAL_FORM_HOSTS = [
 ]
 // URL path suffixes that clearly indicate non-contact pages.
 // Trailing boundary (\/|\.|\?|$) prevents partial matches: /recruit-info is NOT rejected.
-const NON_CONTACT_SUFFIX_RE = /\/(privacy[-_]?(?:policy)?|terms?(?:[-_]of[-_]service)?|sitemap|blog|news|articles?|posts?|column|archive|categories?|shop|cart|login|sign[-_]?up|register|logout|faq|access(?:map)?|recruit(?:ment)?|career|jobs?|about(?:-us)?|company|profile|gallery|works|portfolio|media|press|staff|team|members?|events?|downloads?|videos?|photos?|voice(?:s)?)(?:\/|\.|\?|$)/i
+const NON_CONTACT_SUFFIX_RE = /\/(privacy[-_]?(?:policy)?|terms?(?:[-_]of[-_]service)?|sitemap|blog|news|articles?|posts?|column|archive|categories?|shop|cart|login|sign[-_]?up|register|logout|faq|access(?:map)?|recruit(?:ment)?|career|jobs?|about(?:-us)?|company|profile|gallery|works|portfolio|media|press|staff|team|members?|events?|downloads?|videos?|photos?|voice(?:s)?|search|checkout|product(?:s)?|service(?:s)?|feature(?:s)?|pricing|plan(?:s)?|case[-_]?stud(?:y|ies)|testimonial(?:s)?|partner(?:s)?|investor(?:s)?|ir\b|sustainability|csr|history|overview|mission|vision|values?)(?:\/|\.|\?|$)/i
 // URL segment patterns that strongly suggest a dedicated contact page
 const URL_SEGMENT_RE = /(?:^|\/)(contact|inquiry|toiawase|otoiawase|mailform|ask-us|askus|feedback|renraku|goiken|iawase|gorenraku|gosodan|soudan|meiru|consultation|message|contactus|contactform|inquiryform)(?:\/|\.|\?|_|-|$)/i
 const URL_LOOSE_RE = /(?:%E3%81%8A%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B|%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B|%E3%81%94%E7%9B%B8%E8%AB%87|%E3%81%94%E9%80%A3%E7%B5%A1|cgi-bin|cgi\/)/i
@@ -585,8 +585,7 @@ function validateFormPage(html: string): boolean {
   if (LINE_CONTACT_RE.test(html)) return true
 
   // Reject confirmed thank-you / completion pages (no form present)
-  const titleM = html.match(/<title[^>]*>([^<]*)<\/title>/i)
-  const title = titleM ? titleM[1].toLowerCase() : ''
+  const title = extractTitle(html).toLowerCase()
   if (/送信完了|ありがとうございます|受け付けました|thank you|submission complete|success/.test(title)) {
     if (!/<form[\s>]/i.test(html)) return false
   }
@@ -596,6 +595,12 @@ function validateFormPage(html: string): boolean {
   }
 
   if (!/<form[\s>]/i.test(html)) return false
+
+  // Title-based fast-accept: when the page title unambiguously says "contact/inquiry",
+  // skip the heavy per-form analysis — it's almost certainly a contact page.
+  if (/^(お問い合わせ|ご相談|ご連絡|お問合せ|お問合わせ|メールフォーム|問い合わせフォーム|otoiawase|toiawase|contact|inquiry|contact.?us|contact.?form|inquiry.?form|get.?in.?touch|send.?message)(\s*[|｜\-–—\/・]|\s*$)/i.test(title)) {
+    return true
+  }
 
   // ── Scan every <form> on the page ───────────────────────────────
   // Many pages have a header search box (or newsletter signup) before the actual contact form.
@@ -647,8 +652,16 @@ const PROBE_PATHS = [
   '/%E3%81%8A%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B',  // /お問い合わせ
   '/%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B',            // /問い合わせ
   '/%E3%81%8A%E5%95%8F%E5%90%88%E3%81%9B',                     // /お問合せ
+  // Additional CGI patterns common on old Japanese hosting
+  '/cgi-bin/toiawase.cgi', '/cgi-bin/otoiawase.cgi',
+  '/cgi-bin/contactus.cgi', '/cgi-bin/mailsend.cgi',
+  '/cgi/contact.cgi', '/cgi/inquiry.cgi',
+  // Common Japanese HP builder slug patterns (Jimdo, STORES, BASE)
+  '/contact-page', '/inquiry-page',
+  // Wix / Squarespace
+  '/contact-1', '/contact-2',
 ]
-const PROBE_LIMIT = 15  // max paths to probe per site
+const PROBE_LIMIT = 18  // max paths to probe per site (raised to accommodate new CMS-prioritized paths)
 
 async function processItem(
   url: string,
@@ -673,11 +686,11 @@ async function processItem(
   // domain migrations so relative links like /contact resolve to the correct origin.
   const effectiveBase = (hpFetch.finalUrl && hpFetch.finalUrl !== url) ? hpFetch.finalUrl : baseUrl
 
-  // Detect JavaScript-rendered SPA: Next.js, Nuxt.js, React apps.
+  // Detect JavaScript-rendered SPA: Next.js, Nuxt.js, React apps, Gatsby, Remix, Astro, etc.
   // Contact pages on SPA sites return a JS shell — `validateFormPage` would fail because
   // the form is rendered by JS after load.  We use the HP-level contact link URL directly
   // if the URL strongly implies it's a contact page (URL_SEGMENT_RE match).
-  const isSpa = /__NEXT_DATA__|__NUXT__|_nuxt\/|window\.__INITIAL_STATE__|<div id="app"><\/div>|<div id="__next"><\/div>/.test(hpFetch.html)
+  const isSpa = /__NEXT_DATA__|__NUXT__|_nuxt\/|window\.__INITIAL_STATE__|<div id="app"><\/div>|<div id="__next"><\/div>|window\.__gatsby|___gatsby|<div id="gatsby-focus-wrapper"|remixContext|window\.__remixContext|<astro-island/.test(hpFetch.html)
 
   // Step 3: fetch form page and validate it actually contains a contact form
   let formPageText: string | null = null
@@ -782,10 +795,11 @@ async function processItem(
       if (primary.finalUrl && primary.finalUrl !== extracted.formUrl) {
         extracted.formUrl = primary.finalUrl
       }
-      // Re-extract metadata from the contact page: more accurate than the HP
+      // Re-extract metadata from the contact page — always prefer over HP-level data.
+      // The contact page is the authoritative source for the phone/email used for inquiry.
       const formExtras = extractForms(primary.html, extracted.formUrl!)
-      if (!extracted.phone && formExtras.phone) extracted.phone = formExtras.phone
-      if (!extracted.email && formExtras.email) extracted.email = formExtras.email
+      if (formExtras.phone) extracted.phone = formExtras.phone
+      if (formExtras.email) extracted.email = formExtras.email
       // Use contact page's formTypeHint (overrides the HP-level hint for better accuracy)
       if (formExtras.formTypeHint) extracted.formTypeHint = formExtras.formTypeHint
     } else {
@@ -798,8 +812,8 @@ async function processItem(
           formPageText = cleanHtmlToText(fallback.html)
           formPageTitle = extractTitle(fallback.html)
           const fallbackExtras = extractForms(fallback.html, link.url)
-          if (!extracted.phone && fallbackExtras.phone) extracted.phone = fallbackExtras.phone
-          if (!extracted.email && fallbackExtras.email) extracted.email = fallbackExtras.email
+          if (fallbackExtras.phone) extracted.phone = fallbackExtras.phone
+          if (fallbackExtras.email) extracted.email = fallbackExtras.email
           if (fallbackExtras.formTypeHint) extracted.formTypeHint = fallbackExtras.formTypeHint
           validated = true
           break
@@ -854,8 +868,12 @@ async function processItem(
     // CMS detection: filter out irrelevant probe paths and prioritize site-appropriate ones.
     // Shopify: no CGI, no PHP, only /pages/* routes work.
     // WordPress: /pages/* won't work, but /contact, /contact-us, and /contact-form do.
-    const isShopify = /cdn\.shopify\.com|shopify\.com\/s\/files/.test(hpFetch.html)
+    // Jimdo: contact page is always at /contact or /inquiry (clean URLs, no extensions or /pages/).
+    const isShopify   = /cdn\.shopify\.com|shopify\.com\/s\/files/.test(hpFetch.html)
     const isWordPress = /wp-content\/|wp-includes\/|xmlrpc\.php/.test(hpFetch.html)
+    const isJimdo     = /jimdo\.com|jimdofree\.com|jimdosite\.com/.test(hpFetch.html)
+    const isWix       = /wix\.com|static\.parastorage\.com|wixstatic\.com/.test(hpFetch.html)
+    const isSquare    = /squarespace\.com|static1\.squarespace\.com/.test(hpFetch.html)
 
     const shouldProbe = (suffix: string): boolean => {
       if (isShopify) {
@@ -868,8 +886,30 @@ async function processItem(
         // WordPress doesn't have /pages/* routes (that's Shopify's pattern)
         if (suffix.startsWith('/pages/')) return false
       }
+      if (isJimdo || isWix || isSquare) {
+        // These site builders use clean URLs only — skip CGI, PHP, and HTML-extension paths
+        if (/\.(cgi|pl|php|html?)(\?|$)/i.test(suffix)) return false
+        if (/\/cgi(-bin)?\//.test(suffix)) return false
+        if (suffix.startsWith('/pages/')) return false
+      }
       return true
     }
+
+    // For Shopify sites, try /pages/* paths first — they're the only routes that reliably work.
+    // For other sites, use the default order (most common paths first).
+    const orderedProbePaths = isShopify
+      ? [
+          '/pages/contact', '/pages/inquiry', '/pages/contact-us',
+          '/pages/message', '/pages/form', '/pages/mailform',
+          '/contact', '/contact/', '/inquiry', '/inquiry/',
+          ...PROBE_PATHS.filter(p => !p.startsWith('/pages/') && ![ '/contact', '/contact/', '/inquiry', '/inquiry/'].includes(p))
+        ]
+      : PROBE_PATHS
+
+    // Probe-specific timeout: shorter than the HP fetch timeout to cap worst-case probe latency.
+    // With PROBE_LIMIT=15 paths, worst case drops from 15×8s=120s to 15×5s=75s.
+    // Respect a custom lower timeout from the caller.
+    const probeTimeoutMs = Math.min(timeoutMs, 5000)
 
     // Build set of URL paths already tried as contact link candidates — skip duplicates in probe loop
     // Normalize to remove trailing slashes so /contact and /contact/ are treated as the same path
@@ -879,8 +919,12 @@ async function processItem(
     for (const link of extracted.contactLinks) triedPaths.add(normPath(link.url))
 
     let probed = 0
-    for (const suffix of PROBE_PATHS) {
+    let consecutiveSoft404s = 0  // early-abort counter: stop when 5+ consecutive probes are soft-404
+    for (const suffix of orderedProbePaths) {
       if (probed >= PROBE_LIMIT) break
+      // Early-abort: if many consecutive probes all look like soft-404s,
+      // this site likely serves the same content at every URL path — no contact page exists.
+      if (consecutiveSoft404s >= 5) break
       // Skip paths irrelevant for detected CMS
       if (!shouldProbe(suffix)) continue
       // Skip paths already tried as contact link candidates (normalize trailing slashes)
@@ -890,36 +934,36 @@ async function processItem(
       probed++
       const probeUrl = baseOrigin + suffix
 
-      const probeResult = await fetchUrl(probeUrl, timeoutMs)
-      if (probeResult.error || !probeResult.html) continue
-      if (probeResult.statusCode && probeResult.statusCode >= 400) continue
+      const probeResult = await fetchUrl(probeUrl, probeTimeoutMs)
+      if (probeResult.error || !probeResult.html) { consecutiveSoft404s++; continue }
+      if (probeResult.statusCode && probeResult.statusCode >= 400) { consecutiveSoft404s++; continue }
 
       const probeHtml = probeResult.html
 
       // ── Soft-404 detection ──────────────────────────────────────────
       // 1. Final URL is the homepage (HTTP redirect to homepage)
       const probeFinalNorm = (probeResult.finalUrl || probeUrl).replace(/\/$/, '').toLowerCase()
-      if (probeFinalNorm === hpNorm) continue
+      if (probeFinalNorm === hpNorm) { consecutiveSoft404s++; continue }
 
       // 1b. Final URL redirected to a booking/SNS service — reject
       if (probeResult.finalUrl && probeResult.finalUrl !== probeUrl) {
         try {
           const finalHost = new URL(probeResult.finalUrl).hostname.replace(/^www\./, '')
-          if (REDIRECT_REJECT_HOSTS.some((h) => finalHost === h || finalHost.endsWith('.' + h))) continue
+          if (REDIRECT_REJECT_HOSTS.some((h) => finalHost === h || finalHost.endsWith('.' + h))) { consecutiveSoft404s++; continue }
         } catch { /* ignore */ }
       }
 
       // 2. Same page title as homepage OR explicit 404/not-found title
       const probeTitle = extractTitle(probeHtml).trim().toLowerCase()
       const probeIs404 = /\b404\b|not.?found|ページが見つかりません|お探しのページ.*見つかりません|ページが存在しません/i.test(probeTitle)
-      if (hpTitle && probeTitle && (probeTitle === hpTitle || probeIs404)) continue
+      if (hpTitle && probeTitle && (probeTitle === hpTitle || probeIs404)) { consecutiveSoft404s++; continue }
       // Also catch generic "not found" title regardless of HP title
-      if (probeIs404) continue
+      if (probeIs404) { consecutiveSoft404s++; continue }
 
       // 3. Near-identical HTML length (within 3%) → likely same page (soft 404)
       if (hpLen > 200 && probeHtml.length > 200) {
         const lenRatio = Math.abs(hpLen - probeHtml.length) / Math.max(hpLen, probeHtml.length)
-        if (lenRatio < 0.03) continue
+        if (lenRatio < 0.03) { consecutiveSoft404s++; continue }
       }
 
       // 4. Very short response → likely an error/redirect stub.
@@ -927,14 +971,17 @@ async function processItem(
       //    For non-SPA sites keep the 300 char threshold.
       const probeText = probeHtml.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
       const minTextLen = isSpa ? 10 : 300
-      if (probeText.length < minTextLen) continue
+      if (probeText.length < minTextLen) { consecutiveSoft404s++; continue }
       // 5. Near-identical text content prefix to HP → CMS serving same page at all paths (soft-404)
-      if (hpTextPrefix.length > 100 && probeText.slice(0, 400) === hpTextPrefix) continue
+      if (hpTextPrefix.length > 100 && probeText.slice(0, 400) === hpTextPrefix) { consecutiveSoft404s++; continue }
       // 6. Body text opens with a "page not found" message (custom 200 soft-404 pages)
       //    Check only the first 600 chars of stripped text to avoid false negatives on valid pages
       //    that discuss 404 errors tangentially.
-      if (/お探しのページ.*見つかり|このページ.*存在しません|ページが見つかりません|存在しないページ|page not found|404 error/i.test(probeText.slice(0, 600))) continue
+      if (/お探しのページ.*見つかり|このページ.*存在しません|ページが見つかりません|存在しないページ|page not found|404 error/i.test(probeText.slice(0, 600))) { consecutiveSoft404s++; continue }
       // ───────────────────────────────────────────────────────────────
+
+      // A page that passed all soft-404 checks resets the consecutive counter
+      consecutiveSoft404s = 0
 
       // SPA probe fallback: URL_SEGMENT_RE match is sufficient validation for JS-rendered sites
       const probeValid = validateFormPage(probeHtml)
