@@ -422,20 +422,25 @@ function validateFormPage(html: string): boolean {
   if (!hasUserInput) return false
 
   // ── Textarea path ────────────────────────────────────────────────────────
-  // Textarea is the strongest inquiry signal.  Accept only when a specific
-  // inquiry-related keyword appears on the page (avoids blog comments, reviews).
-  // "message" and generic "content/内容" intentionally excluded — too noisy.
+  // Textarea is the strongest inquiry signal, but require the keyword to appear
+  // within the form context — NOT just anywhere on the page — to prevent blog
+  // comment sections on pages that happen to have a "お問い合わせ" nav link.
   if (/textarea/i.test(html)) {
+    const formIdx = html.toLowerCase().indexOf('<form')
+    // Search a generous 800-char window before the form (headings) + 5000 after (fields+labels)
+    const formCtx = formIdx !== -1
+      ? html.slice(Math.max(0, formIdx - 800), Math.min(html.length, formIdx + 5000))
+      : html
     const INQUIRY_KW = /お問い合わせ|ご連絡|ご相談|お問合|inquiry|contact us|contact form|ご質問|お問い合わせ内容|お問合せ内容|メッセージ内容|ご意見/i
-    if (INQUIRY_KW.test(html)) return true
-    // Textarea without inquiry keyword: only accept if name + email fields present
-    // (catches minimal contact forms that label fields generically)
-    const hasNameField = /<input[^>]+(name|id)=["']?(?:name|your[_-]?name|お名前|namae)/i.test(html)
-    const hasEmailField = /<input[^>]+type=["']?email/i.test(html)
+    if (INQUIRY_KW.test(formCtx)) return true
+    // Textarea without inquiry keyword in context: accept if name + email fields present
+    // (catches minimal contact forms that use generic field labels)
+    const hasNameField = /<input[^>]+(name|id)=["']?(?:name|your[_-]?name|お名前|namae)/i.test(formCtx)
+    const hasEmailField = /<input[^>]+type=["']?email/i.test(formCtx)
     if (hasNameField && hasEmailField) return true
-    // fallback: any text input + email field + submit (covers generic English forms)
-    const hasTextInput = /<input[^>]+type=["']?text/i.test(html)
-    const hasSubmitFallback = /<(input|button)[^>]*type=["']?submit/i.test(html)
+    // fallback: any text input + email field + submit in form context
+    const hasTextInput = /<input[^>]+type=["']?text/i.test(formCtx)
+    const hasSubmitFallback = /<(input|button)[^>]*type=["']?submit/i.test(formCtx)
     if (hasTextInput && hasEmailField && hasSubmitFallback) return true
   }
 
