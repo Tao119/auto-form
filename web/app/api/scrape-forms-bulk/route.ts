@@ -250,6 +250,11 @@ function extractForms(html: string, baseUrl: string): {
     'benri-yoyaku.jp','chouseisan.com',
     'jalan.net','ikyu.com','hotels.com','booking.com','agoda.com',  // hotel booking
     'airbnb.com','airbnb.jp',
+    // Restaurant review & booking portals (HP might redirect here or link here)
+    'tabelog.com','gnavi.co.jp','gurunavi.com',
+    'tripadvisor.com','tripadvisor.jp',
+    'yelp.com','retty.me',
+    'loco.yahoo.co.jp',  // Yahoo Local
   ]
   const EXTERNAL_FORM_HOSTS = [
     // Google Forms
@@ -496,6 +501,10 @@ function _validateFormContext(formCtx: string): boolean {
     const hasTextInput = /<input[^>]+type=["']?text/i.test(formCtx)
     const hasSubmitFallback = /<(input|button)[^>]*type=["']?submit/i.test(formCtx)
     if (hasTextInput && hasEmailField && hasSubmitFallback) return true
+    // Relaxed: textarea + submit + 2+ text inputs → multi-field contact form
+    // (Handles old Japanese sites where email is type="text", not type="email")
+    const textInputCount = (formCtx.match(/<input[^>]+type=["']?text/gi) || []).length
+    if (hasSubmitFallback && textInputCount >= 2) return true
   }
 
   // ── Email/tel + submit path ─────────────────────────────────────
@@ -627,6 +636,10 @@ async function processItem(
     'reservawith.google.com','business.google.com',
     'caresul.jp','freqy.jp','benri-yoyaku.jp',
     'jalan.net','ikyu.com','booking.com','agoda.com','airbnb.com','airbnb.jp',
+    // Restaurant review / portal sites
+    'tabelog.com','gnavi.co.jp','gurunavi.com',
+    'tripadvisor.com','tripadvisor.jp',
+    'yelp.com','retty.me','loco.yahoo.co.jp',
     // Social media
     'facebook.com','instagram.com','twitter.com','x.com','linkedin.com',
     'tiktok.com','youtube.com','pinterest.com','maps.google.com',
