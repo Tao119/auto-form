@@ -58,6 +58,19 @@ export default function ProjectResultsPage() {
   const [exporting, setExporting] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [batchUpdating, setBatchUpdating] = useState(false)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+
+  // Press '/' to focus search input
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === '/' && !e.metaKey && !e.ctrlKey && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
+        e.preventDefault()
+        searchInputRef.current?.focus()
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
 
   // Debounce search input to avoid hammering the API on every keystroke
   useEffect(() => {
@@ -335,9 +348,11 @@ export default function ProjectResultsPage() {
             <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-gray-400" />
             <input
               type="text"
-              placeholder="会社名・URL検索..."
+              ref={searchInputRef}
+              placeholder="会社名・URL検索... [/]"
               value={filters.search}
               onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+              onKeyDown={(e) => { if (e.key === 'Escape') { setFilters({ ...filters, search: '' }); searchInputRef.current?.blur() } }}
               className="w-full bg-white border border-gray-300 rounded pl-8 pr-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:border-blue-500 focus:outline-none"
             />
           </div>

@@ -6,8 +6,8 @@ export interface CompanyRow {
   '電話番号': string
   'メールアドレス': string
   '住所': string
-  'エリア': string
   '業種': string
+  'エリア': string
   'フォーム種別': string
   '収集日時': string
   'ステータス': string
