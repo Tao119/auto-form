@@ -126,6 +126,11 @@ export default function ResultsPage() {
                     <span className="text-sm font-medium text-gray-900 group-hover/card:text-blue-600 transition-colors">
                       {proj.name}
                     </span>
+                    {proj.industry && (
+                      <span className="text-xs px-1.5 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 rounded">
+                        {proj.industry}
+                      </span>
+                    )}
                     <ChevronRight className="w-3.5 h-3.5 text-gray-300 group-hover/card:text-gray-500 transition-colors" />
                   </div>
                   {proj.description && (

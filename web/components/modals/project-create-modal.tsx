@@ -4,6 +4,8 @@ import { useState, useEffect, useRef } from 'react'
 import { X, FolderOpen } from 'lucide-react'
 import type { Project } from '@/lib/types'
 
+const INDUSTRIES = ['美容室', 'ヘアサロン', 'エステサロン', '美容クリニック', '歯科医院', '整骨院', '中古車販売', 'その他']
+
 interface Props {
   open: boolean
   onClose: () => void
@@ -13,6 +15,7 @@ interface Props {
 export function ProjectCreateModal({ open, onClose, onCreate }: Props) {
   const [name, setName] = useState('')
   const [desc, setDesc] = useState('')
+  const [industry, setIndustry] = useState('')
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -21,6 +24,7 @@ export function ProjectCreateModal({ open, onClose, onCreate }: Props) {
     if (open) {
       setName('')
       setDesc('')
+      setIndustry('')
       setError('')
       const t = setTimeout(() => inputRef.current?.focus(), 60)
       return () => clearTimeout(t)
@@ -45,7 +49,11 @@ export function ProjectCreateModal({ open, onClose, onCreate }: Props) {
       const res = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), description: desc.trim() || undefined }),
+        body: JSON.stringify({
+          name: name.trim(),
+          description: desc.trim() || undefined,
+          industry: industry || undefined,
+        }),
       })
       const d = await res.json()
       if (d.success) {
@@ -102,6 +110,28 @@ export function ProjectCreateModal({ open, onClose, onCreate }: Props) {
             />
           </div>
 
+          {/* Industry */}
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1.5">
+              業種 <span className="text-gray-400">（任意）</span>
+            </label>
+            <select
+              value={industry}
+              onChange={(e) => setIndustry(e.target.value)}
+              className="w-full bg-white border border-gray-300 rounded px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none transition-colors"
+            >
+              <option value="">指定なし（複数業種）</option>
+              {INDUSTRIES.filter(i => i !== 'その他').map((i) => (
+                <option key={i} value={i}>{i}</option>
+              ))}
+            </select>
+            {industry && (
+              <p className="mt-1 text-xs text-blue-600">
+                業種を固定すると、実行パネルで自動的に {industry} がセットされます
+              </p>
+            )}
+          </div>
+
           {/* Description */}
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1.5">
@@ -111,7 +141,7 @@ export function ProjectCreateModal({ open, onClose, onCreate }: Props) {
               value={desc}
               onChange={(e) => setDesc(e.target.value)}
               placeholder="例: 東京・神奈川エリアの美容室を対象に収集"
-              rows={3}
+              rows={2}
               className="w-full bg-white border border-gray-300 rounded px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:border-blue-500 focus:outline-none resize-none transition-colors"
             />
           </div>

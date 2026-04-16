@@ -45,7 +45,7 @@ export function getProject(id: string): Project | undefined {
   return readData().projects.find((p) => p.id === id)
 }
 
-export function createProject(name: string, description?: string): Project {
+export function createProject(name: string, description?: string, industry?: string): Project {
   const data = readData()
   const today = new Date().toISOString().slice(0, 10).replace(/-/g, '')
   const existing = data.projects.filter((p) => p.id.startsWith(`proj-${today}`))
@@ -53,7 +53,8 @@ export function createProject(name: string, description?: string): Project {
   const project: Project = {
     id: `proj-${today}-${seq}`,
     name,
-    description,
+    ...(description ? { description } : {}),
+    ...(industry ? { industry } : {}),
     createdAt: new Date().toISOString(),
     runIds: [],
   }

@@ -26,12 +26,13 @@ export async function GET() {
 const CreateSchema = z.object({
   name: z.string().min(1).max(100),
   description: z.string().optional(),
+  industry: z.string().optional(),
 })
 
 export async function POST(req: NextRequest) {
   try {
     const body = CreateSchema.parse(await req.json())
-    const project = createProject(body.name, body.description)
+    const project = createProject(body.name, body.description, body.industry)
     return NextResponse.json({ success: true, data: project })
   } catch (e) {
     return NextResponse.json({ success: false, error: String(e) }, { status: 400 })
