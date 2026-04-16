@@ -513,8 +513,9 @@ function _validateFormContext(formCtx: string): boolean {
  *  - Email/tel input + submit → only accept when keyword appears IN the form context.
  */
 function validateFormPage(html: string): boolean {
-  // External form embeds always accepted (Google Forms, Tayori, typeform, HubSpot, etc.)
-  if (/docs\.google\.com\/forms|form\.run|typeform\.com|jotform\.com|tayori\.com|formstack\.com|formzu\.net|form\.kintoneapp|mailform\.jp|mfcontacts\.com|formrun\.com|tally\.so|cognito-forms\.com|wufoo\.com|share\.hsforms\.com|forms\.hubspot\.com/i.test(html)) return true
+  // External form embeds always accepted — checks both fast-path (Google Forms, etc.) and
+  // additional known form SaaS services that may appear in iframe src or form action attributes.
+  if (/docs\.google\.com\/forms|forms\.gle|form\.run|formrun\.com|typeform\.com|jotform\.com|tayori\.com|formstack\.com|formzu\.net|form\.kintoneapp|kintone\.com|freeml\.net|mailform\.jp|mfcontacts\.com|formmailer\.jp|tally\.so|paperform\.co|cognito-forms\.com|wufoo\.com|surveymonkey\.com|share\.hsforms\.com|forms\.hubspot\.com|share\.formsite\.com|app\.getresponse\.com|mailchimp\.com|zoho\.com/i.test(html)) return true
   // LINE contact links — always valid contact method
   if (/lin\.ee\/|page\.line\.me\/|accountpage\.line\.me\/|liff\.line\.me\//i.test(html)) return true
 
@@ -638,6 +639,13 @@ async function processItem(
             const finalHost = new URL(finalUrl).hostname.replace(/^www\./, '')
             if (REDIRECT_REJECT_HOSTS.some((h) => finalHost === h || finalHost.endsWith('.' + h))) return null
           } catch { /* ignore */ }
+        }
+
+        // Soft-404 detection: if the contact page redirected back to the HP root, it doesn't exist
+        if (finalUrl && finalUrl !== targetUrl) {
+          const normFinal = finalUrl.replace(/\/$/, '').toLowerCase()
+          const normBase  = effectiveBase.replace(/\/$/, '').toLowerCase()
+          if (normFinal === normBase) return null
         }
       }
       if (!html) return null
