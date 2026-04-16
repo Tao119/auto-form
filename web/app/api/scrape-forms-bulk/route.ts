@@ -652,6 +652,12 @@ async function processItem(
   // domain migrations so relative links like /contact resolve to the correct origin.
   const effectiveBase = (hpFetch.finalUrl && hpFetch.finalUrl !== url) ? hpFetch.finalUrl : baseUrl
 
+  // Detect JavaScript-rendered SPA: Next.js, Nuxt.js, React apps.
+  // Contact pages on SPA sites return a JS shell — `validateFormPage` would fail because
+  // the form is rendered by JS after load.  We use the HP-level contact link URL directly
+  // if the URL strongly implies it's a contact page (URL_SEGMENT_RE match).
+  const isSpa = /__NEXT_DATA__|__NUXT__|_nuxt\/|window\.__INITIAL_STATE__|<div id="app"><\/div>|<div id="__next"><\/div>/.test(hpFetch.html)
+
   // Step 3: fetch form page and validate it actually contains a contact form
   let formPageText: string | null = null
   let formPageTitle: string | null = null
@@ -718,6 +724,18 @@ async function processItem(
         }
       }
       if (!html) return null
+
+      // SPA fallback: if the site is a JavaScript-rendered SPA and the contact page
+      // returned a very short or JS-only shell, accept it based on URL signal alone
+      // (strong URL match like /contact, /inquiry) rather than form HTML presence.
+      if (!validateFormPage(html) && isSpa && URL_SEGMENT_RE.test(targetUrl)) {
+        const strippedText = html.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
+        // Only accept if the page returned SOME content (not a pure 404 or redirect stub)
+        if (strippedText.length >= 20 && strippedText.length < 800) {
+          return { html, valid: true, finalUrl }
+        }
+      }
+
       return { html, valid: validateFormPage(html), finalUrl }
     } catch { return null }
   }
