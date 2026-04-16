@@ -212,6 +212,24 @@ function getDb(): Database.Database {
         OR formUrl LIKE '%://epark.jp/shopinfo/%'
       )
   `)
+  // Migration: reclassify recruitment/job-application forms mis-classified as 'inquiry'.
+  // Targets very specific URL patterns that unambiguously indicate job-application forms
+  // (e.g. /recruit/entry/, /saiyo/entry/, /career/apply/) to avoid false-positive reclassification.
+  _db.exec(`
+    UPDATE companies
+    SET formType = 'recruitment'
+    WHERE formType = 'inquiry'
+      AND (
+        formUrl LIKE '%/recruit/entry%'
+        OR formUrl LIKE '%/recruit-entry%'
+        OR formUrl LIKE '%/saiyo/entry%'
+        OR formUrl LIKE '%/career/apply%'
+        OR formUrl LIKE '%/careers/apply%'
+        OR formUrl LIKE '%/jobs/apply%'
+        OR formUrl LIKE '%/obo/%'
+        OR (formUrl LIKE '%recruit%' AND formUrl LIKE '%/apply%')
+      )
+  `)
   // Migration: re-normalize URLs where display params leaked into normalizedFormUrl.
   // Affects LINE URLs (?openQrModal, ?oat_content) and mypl.net (?skin=) that were
   // inserted before those params were added to NORM_TRACKING_PARAMS.

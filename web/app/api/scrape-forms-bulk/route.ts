@@ -4,6 +4,7 @@ import * as http from 'http'
 import * as zlib from 'zlib'
 import { URL } from 'url'
 import { z } from 'zod'
+import OpenAI from 'openai'
 
 // ── Global concurrency guard ───────────────────────────────────────
 // Allow at most MAX_CONCURRENT_BATCHES simultaneous scraping jobs to
@@ -222,7 +223,7 @@ export interface FormExtractResult {
   contactLinks: Array<{ url: string; text: string; score: number }>
   formPageText: string | null  // cleaned text from form page (for GPT)
   formPageTitle: string | null
-  formTypeHint: 'inquiry' | 'booking' | 'LINE' | null  // detected form type hint
+  formTypeHint: 'inquiry' | 'booking' | 'LINE' | 'recruitment' | 'unknown' | null  // detected form type hint
   error: string | null
 }
 
@@ -1605,6 +1606,77 @@ async function processItem(
   return { url, baseUrl, ...extracted, formPageText, formPageTitle, error: null }
 }
 
+// ── GPT form-type classifier ───────────────────────────────────────────────────
+// Lazy singleton — only created when OPENAI_API_KEY is present.
+let _openai: OpenAI | null = null
+function getOpenAI(): OpenAI | null {
+  if (!process.env.OPENAI_API_KEY) return null
+  if (!_openai) {
+    _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  }
+  return _openai
+}
+
+/**
+ * Ask GPT-4o-mini to classify a form result into one of:
+ *   inquiry | booking | recruitment | unknown
+ *
+ * Called only when OPENAI_API_KEY is set and the rule-based pass returned
+ * 'inquiry' or null — i.e. ambiguous cases that need a second opinion.
+ * Falls back to the original formTypeHint on any API error.
+ */
+async function classifyFormWithGpt(
+  result: FormExtractResult
+): Promise<FormExtractResult['formTypeHint']> {
+  const openai = getOpenAI()
+  if (!openai) return result.formTypeHint
+
+  try {
+    const formUrl   = result.formUrl ?? ''
+    const title     = (result.formPageTitle ?? '').slice(0, 80)
+    const body      = (result.formPageText  ?? '').slice(0, 500)
+    const linkTexts = result.contactLinks.slice(0, 3).map((l) => l.text).join(' / ')
+
+    const userMessage = [
+      `URL: ${formUrl}`,
+      `タイトル: ${title}`,
+      `リンクテキスト: ${linkTexts}`,
+      `本文抜粋: ${body}`,
+      '',
+      '上記フォームの種類を次の4つから1つだけ答えてください（理由不要）:',
+      'inquiry / booking / recruitment / unknown',
+    ].join('\n')
+
+    const resp = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content:
+            'あなたはWebフォームの種類を判定するAIです。' +
+            'inquiry=問い合わせ・相談・資料請求など。' +
+            'booking=来店・予約・アポイント系。' +
+            'recruitment=採用・求人・エントリー系。' +
+            'unknown=上記のどれでもない、またはフォームではないページ。' +
+            '1単語だけ回答してください。',
+        },
+        { role: 'user', content: userMessage },
+      ],
+      max_tokens: 10,
+      temperature: 0,
+    })
+
+    const raw = resp.choices[0]?.message?.content?.trim().toLowerCase() ?? ''
+    if (raw.includes('booking'))     return 'booking'
+    if (raw.includes('recruitment')) return 'recruitment'
+    if (raw.includes('inquiry'))     return 'inquiry'
+    if (raw.includes('unknown'))     return 'unknown'
+    return result.formTypeHint  // unrecognised response → keep original
+  } catch {
+    return result.formTypeHint  // API error → keep original
+  }
+}
+
 /**
  * Sliding-window concurrent processor.
  * Keeps at most `concurrency` items in-flight at all times.
@@ -1671,11 +1743,54 @@ export async function POST(req: NextRequest) {
     const { items, timeoutMs, concurrency, fetchFormPage } = body
 
     const startMs = Date.now()
-    const results = await processBatch(items, timeoutMs, concurrency, fetchFormPage)
+    const rawResults = await processBatch(items, timeoutMs, concurrency, fetchFormPage)
+
+    // ── GPT classification pass ──────────────────────────────────────
+    // For ambiguous results (formTypeHint is 'inquiry' or null), ask GPT to
+    // verify and distinguish inquiry / booking / recruitment / unknown.
+    // LINE and booking (URL-pattern reliable) are skipped.
+    let gptClassified = 0
+    let results: typeof rawResults = rawResults
+    if (process.env.OPENAI_API_KEY) {
+      const toClassify = rawResults
+        .map((r, i) => ({ r, i }))
+        .filter(({ r }) =>
+          r.hasContactLink &&
+          r.formTypeHint !== 'LINE' &&
+          r.formTypeHint !== 'booking' &&
+          r.formTypeHint !== 'recruitment'
+        )
+
+      if (toClassify.length > 0) {
+        const classified = rawResults.map((r) => ({ ...r }))
+        const queue = toClassify.slice()
+        const GPT_CONCURRENCY = 50
+
+        const gptWorker = async () => {
+          while (true) {
+            const item = queue.shift()
+            if (!item) break
+            const newHint = await classifyFormWithGpt(item.r)
+            if (newHint !== item.r.formTypeHint) {
+              classified[item.i] = { ...classified[item.i], formTypeHint: newHint }
+              gptClassified++
+            }
+          }
+        }
+
+        await Promise.all(
+          Array.from({ length: Math.min(GPT_CONCURRENCY, toClassify.length) }, gptWorker)
+        )
+        results = classified
+      }
+    }
+
     const elapsedMs = Date.now() - startMs
 
-    const successCount = results.filter((r) => r.error === null).length
+    const successCount  = results.filter((r) => r.error === null).length
     const formFoundCount = results.filter((r) => r.hasContactLink).length
+    const inquiryCount  = results.filter((r) => r.formTypeHint === 'inquiry').length
+    const unknownCount  = results.filter((r) => r.formTypeHint === 'unknown').length
 
     return NextResponse.json({
       success: true,
@@ -1688,6 +1803,9 @@ export async function POST(req: NextRequest) {
         formFoundRate: Math.round((formFoundCount / Math.max(results.length, 1)) * 100),
         elapsedMs,
         avgMs: Math.round(elapsedMs / Math.max(results.length, 1)),
+        gptClassified,
+        inquiryCount,
+        unknownCount,
       },
     })
   } catch (e) {
