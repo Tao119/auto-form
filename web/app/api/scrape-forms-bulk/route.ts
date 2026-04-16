@@ -17,6 +17,85 @@ let _activeBatches = 0
 const _httpAgent  = new http.Agent({ keepAlive: true, maxSockets: 64, maxFreeSockets: 32 })
 const _httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 64, maxFreeSockets: 32, rejectUnauthorized: false })
 
+// ── Contact extraction constants ──────────────────────────────────────────────
+// Defined at module scope to avoid re-allocation on every request
+// (extractForms and validateFormPage are called multiple times per item).
+
+const CONTACT_TEXT_KW = [
+  'お問い合わせ','お問合わせ','お問合せ','otoiawase',
+  'contact us','contact form','inquiry','問い合わせフォーム',
+  'ご相談','メールフォーム','メール送信','renraku','goiken',
+  'ご連絡','無料相談','資料請求','send message','write to us','get in touch',
+  // Looser (lower weight) — matched as text but NOT sole basis for accepting
+  'contact','feedback',
+]
+const ALWAYS_REJECT_HOSTS = [
+  'facebook.com','fb.com','instagram.com','twitter.com','x.com',
+  'linkedin.com','tiktok.com','youtube.com','pinterest.com',
+  'maps.google.com','google.co.jp','google.com','maps.apple.com',
+  'amazon.co.jp','amazon.com','rakuten.co.jp','yahoo.co.jp',
+  'drive.google.com','dropbox.com','onedrive.com',
+  'apple.com',
+]
+const BOOKING_KW = [
+  '予約','ご予約','reservation','booking','ネット予約','hotpepper',
+  'reserve','yoyaku','minimo','beauty.hotpepper',
+]
+const BOOKING_URL_HOSTS = [
+  'coubic.com','airreserve.net','reserva.be','minimo.io',
+  'tablecheck.com','ebica.jp','toreta.in','hotpepper.jp',
+  'beauty.hotpepper.jp','select-type.com','icalendar.jp',
+  'reservestock.jp','reservia.jp',
+  'epark.jp','eparkeclinic.jp',
+  'reservawith.google.com','business.google.com',
+  'caresul.jp','freqy.jp','benri-yoyaku.jp','chouseisan.com',
+  'jalan.net','ikyu.com','hotels.com','booking.com','agoda.com',
+  'airbnb.com','airbnb.jp',
+  'tabelog.com','gnavi.co.jp','gurunavi.com',
+  'tripadvisor.com','tripadvisor.jp',
+  'yelp.com','retty.me','loco.yahoo.co.jp',
+]
+const EXTERNAL_FORM_HOSTS = [
+  'docs.google.com','forms.gle',
+  'form.run','tayori.com','form.kintoneapp.com','kintone.com',
+  'formzu.net','freeml.net','formmailer.jp',
+  'formstack.com','typeform.com','jotform.com','tally.so','paperform.co',
+  'wufoo.com','surveymonkey.com','cognito-forms.com',
+  'share.hsforms.com','forms.hubspot.com',
+  'share.formsite.com',
+  'app.getresponse.com',
+  'lin.ee','page.line.me','accountpage.line.me','liff.line.me',
+  'mailchimp.com','zoho.com',
+]
+// URL path suffixes that clearly indicate non-contact pages.
+// Trailing boundary (\/|\.|\?|$) prevents partial matches: /recruit-info is NOT rejected.
+const NON_CONTACT_SUFFIX_RE = /\/(privacy[-_]?(?:policy)?|terms?(?:[-_]of[-_]service)?|sitemap|blog|news|articles?|posts?|shop|cart|login|sign[-_]?up|register|logout|faq|access(?:map)?|recruit(?:ment)?|career|jobs?|about(?:-us)?|company|profile|gallery|works|portfolio|media|press)(?:\/|\.|\?|$)/i
+// URL segment patterns that strongly suggest a dedicated contact page
+const URL_SEGMENT_RE = /(?:^|\/)(contact|inquiry|toiawase|otoiawase|mailform|ask-us|askus|feedback|renraku|goiken|iawase|gorenraku|gosodan)(?:\/|\.|\?|_|-|$)/i
+const URL_LOOSE_RE = /(?:%E3%81%8A%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B|%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B|%E3%81%94%E7%9B%B8%E8%AB%87|%E3%81%94%E9%80%A3%E7%B5%A1|cgi-bin|cgi\/)/i
+// LINE deep-link patterns — always valid contact method, skip HTTP validation
+const LINE_HINT_PATTERNS = [/lin\.ee\//i, /page\.line\.me\//i, /accountpage\.line\.me\//i, /liff\.line\.me\//i]
+const LINE_URL_RE = /^https?:\/\/(lin\.ee|page\.line\.me|accountpage\.line\.me|liff\.line\.me)\//i
+const LINE_CONTACT_RE = /lin\.ee\/|page\.line\.me\/|accountpage\.line\.me\/|liff\.line\.me\//i
+// Redirect destinations that indicate the target URL is NOT an inquiry form
+const REDIRECT_REJECT_HOSTS = [
+  'coubic.com','airreserve.net','reserva.be','minimo.io',
+  'tablecheck.com','ebica.jp','toreta.in','hotpepper.jp',
+  'beauty.hotpepper.jp','select-type.com','icalendar.jp',
+  'reservestock.jp','reservia.jp',
+  'epark.jp','eparkeclinic.jp',
+  'reservawith.google.com','business.google.com',
+  'caresul.jp','freqy.jp','benri-yoyaku.jp','chouseisan.com',
+  'jalan.net','ikyu.com','hotels.com','booking.com','agoda.com','airbnb.com','airbnb.jp',
+  'tabelog.com','gnavi.co.jp','gurunavi.com',
+  'tripadvisor.com','tripadvisor.jp',
+  'yelp.com','retty.me','loco.yahoo.co.jp',
+  'facebook.com','instagram.com','twitter.com','x.com','linkedin.com',
+  'tiktok.com','youtube.com','pinterest.com','maps.google.com',
+]
+// Fast-pass for known external form SaaS — page is a valid contact form without further analysis
+const EXTERNAL_FORM_FAST_PASS_RE = /docs\.google\.com\/forms|forms\.gle|form\.run|formrun\.com|typeform\.com|jotform\.com|tayori\.com|formstack\.com|formzu\.net|form\.kintoneapp|kintone\.com|freeml\.net|mailform\.jp|mfcontact\.com|mfcontacts\.com|formmailer\.jp|tally\.so|paperform\.co|cognito-forms\.com|wufoo\.com|surveymonkey\.com|share\.hsforms\.com|forms\.hubspot\.com|share\.formsite\.com|app\.getresponse\.com|mailchimp\.com|zoho\.com/i
+
 const Schema = z.object({
   items: z.array(z.object({
     url: z.string(),       // HP URL to fetch
@@ -202,80 +281,6 @@ function extractForms(html: string, baseUrl: string): {
   formTypeHint: 'inquiry' | 'booking' | 'LINE' | null
   contactLinks: Array<{ url: string; text: string; score: number }>
 } {
-  // Specific contact-page text anchors — require the link text to clearly say "contact us"
-  const CONTACT_TEXT_KW = [
-    'お問い合わせ','お問合わせ','お問合せ','otoiawase',
-    'contact us','contact form','inquiry','問い合わせフォーム',
-    'ご相談','メールフォーム','メール送信','renraku','goiken',
-    'ご連絡','無料相談','資料請求','send message','write to us','get in touch',
-    // Looser (lower weight) — matched as text but NOT sole basis for accepting
-    'contact','feedback',
-  ]
-  // URL-path patterns that strongly suggest a contact page
-  const CONTACT_URL_KW = [
-    'contact','inquiry','toiawase','otoiawase','mailform',
-    'ask-us','askus','feedback','renraku','goiken',
-    'お問い合わせ','問い合わせ','ご相談','ご連絡','cgi-bin','cgi/',
-    // Note: 'form','mail','send','message','support' intentionally removed — too generic
-  ]
-  // Domains that are NEVER valid inquiry form URLs — immediately skip links pointing here
-  const ALWAYS_REJECT_HOSTS = [
-    // Social media
-    'facebook.com','fb.com','instagram.com','twitter.com','x.com',
-    'linkedin.com','tiktok.com','youtube.com','pinterest.com',
-    // Maps
-    'maps.google.com','google.co.jp','google.com','maps.apple.com',
-    // E-commerce platforms
-    'amazon.co.jp','amazon.com','rakuten.co.jp','yahoo.co.jp',
-    // Cloud storage / docs (non-form)
-    'drive.google.com','dropbox.com','onedrive.com',
-    // Apple
-    'apple.com',
-  ]
-
-  const BOOKING_KW = [
-    '予約','ご予約','reservation','booking','ネット予約','hotpepper',
-    'reserve','yoyaku','minimo','beauty.hotpepper',
-  ]
-  // Booking service hostnames — links pointing here are always treated as booking, never inquiry
-  const BOOKING_URL_HOSTS = [
-    'coubic.com','airreserve.net','reserva.be','minimo.io',
-    'tablecheck.com','ebica.jp','toreta.in','hotpepper.jp',
-    'beauty.hotpepper.jp','select-type.com','icalendar.jp',
-    'reservestock.jp','reservia.jp',
-    // Additional booking / reservation services
-    'epark.jp','eparkeclinic.jp',      // medical / dental appointments
-    'reservawith.google.com','business.google.com',  // Google Reserve
-    'caresul.jp','freqy.jp',           // beauty/nail booking
-    'benri-yoyaku.jp','chouseisan.com',
-    'jalan.net','ikyu.com','hotels.com','booking.com','agoda.com',  // hotel booking
-    'airbnb.com','airbnb.jp',
-    // Restaurant review & booking portals (HP might redirect here or link here)
-    'tabelog.com','gnavi.co.jp','gurunavi.com',
-    'tripadvisor.com','tripadvisor.jp',
-    'yelp.com','retty.me',
-    'loco.yahoo.co.jp',  // Yahoo Local
-  ]
-  const EXTERNAL_FORM_HOSTS = [
-    // Google Forms
-    'docs.google.com','forms.gle',
-    // Japanese form SaaS (inquiry / contact)
-    'form.run','tayori.com','form.kintoneapp.com','kintone.com',
-    'formzu.net','freeml.net','formmailer.jp',
-    // International form SaaS
-    'formstack.com','typeform.com','jotform.com','tally.so','paperform.co',
-    'wufoo.com','surveymonkey.com','cognito-forms.com',
-    // CRM-embedded contact forms
-    'share.hsforms.com','forms.hubspot.com',  // HubSpot
-    'share.formsite.com',                     // Formsite
-    'app.getresponse.com',                    // GetResponse
-    // LINE (contact via LINE Messenger)
-    'lin.ee','page.line.me','accountpage.line.me','liff.line.me',
-    // Other
-    'mailchimp.com','zoho.com',
-    // NOTE: booking services (coubic, airreserve, etc.) are in BOOKING_URL_HOSTS and always rejected
-  ]
-
   // Require textarea (message field): filters out search boxes, login forms, newsletter signups
   const hasInlineForm = /<form[\s>]/i.test(html) && (
     /textarea/i.test(html) ||
@@ -327,9 +332,6 @@ function extractForms(html: string, baseUrl: string): {
     if (isBooking) continue
 
     // Reject links whose URL path clearly indicates non-contact content.
-    // Pattern: the last meaningful path segment is a well-known non-contact word.
-    // We match word-boundary-style so /recruit-info/ is rejected but /contact-form/ is not.
-    const NON_CONTACT_SUFFIX_RE = /\/(privacy[-_]?(?:policy)?|terms?(?:[-_]of[-_]service)?|sitemap|blog|news|articles?|posts?|shop|cart|login|sign[-_]?up|register|logout|faq|access(?:map)?|recruit|career|jobs?)(?:\/|\.|\?|$)/i
     if (NON_CONTACT_SUFFIX_RE.test(lUrl)) continue
 
     let score = 0
@@ -337,9 +339,6 @@ function extractForms(html: string, baseUrl: string): {
 
     // URL path matching: require word boundaries to avoid false positives
     // e.g. /contact, /contact.html, /contact/, /contact? but NOT /contactlist, /subcontract
-    const URL_SEGMENT_RE = /(?:^|\/)(contact|inquiry|toiawase|otoiawase|mailform|ask-us|askus|feedback|renraku|goiken|iawase|gorenraku|gosodan)(?:\/|\.|\?|_|-|$)/i
-    // Percent-encoded Japanese contact page keywords (お問い合わせ, 問い合わせ, ご相談, ご連絡)
-    const URL_LOOSE_RE = /(?:%E3%81%8A%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B|%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B|%E3%81%94%E7%9B%B8%E8%AB%87|%E3%81%94%E9%80%A3%E7%B5%A1|cgi-bin|cgi\/)/i
     if (URL_SEGMENT_RE.test(lUrl) || URL_LOOSE_RE.test(lUrl)) score += 8
     // Also decode the URL and check for raw Japanese keywords
     try {
@@ -454,7 +453,6 @@ function extractForms(html: string, baseUrl: string): {
 
   // Determine formTypeHint from detected links and page content
   const lHtml = html.toLowerCase()
-  const LINE_HINT_PATTERNS = [/lin\.ee\//i, /page\.line\.me\//i, /accountpage\.line\.me\//i, /liff\.line\.me\//i]
   let formTypeHint: 'inquiry' | 'booking' | 'LINE' | null = null
   if (formUrl && LINE_HINT_PATTERNS.some((re) => re.test(formUrl!))) {
     formTypeHint = 'LINE'
@@ -481,6 +479,10 @@ function _validateFormContext(formCtx: string): boolean {
 
   // Reject login / registration forms — contact forms never have password fields
   if (/type=["']?password/i.test(formCtx)) return false
+
+  // Reject purchase / checkout forms — contact forms don't have cart, quantity, or payment context
+  if (/数量|カート|ショッピング|購入する|ご購入|注文内容|決済|クレジットカード|お支払い方法|配送先住所/i.test(formCtx) &&
+      !/お問い合わせ|ご連絡|ご相談|inquiry|contact/i.test(formCtx)) return false
 
   // Reject WordPress / blog CMS comment forms.
   // These have textarea + name/email but are comment sections, not inquiry forms.
@@ -539,9 +541,9 @@ function _validateFormContext(formCtx: string): boolean {
 function validateFormPage(html: string): boolean {
   // External form embeds always accepted — checks both fast-path (Google Forms, etc.) and
   // additional known form SaaS services that may appear in iframe src or form action attributes.
-  if (/docs\.google\.com\/forms|forms\.gle|form\.run|formrun\.com|typeform\.com|jotform\.com|tayori\.com|formstack\.com|formzu\.net|form\.kintoneapp|kintone\.com|freeml\.net|mailform\.jp|mfcontact\.com|mfcontacts\.com|formmailer\.jp|tally\.so|paperform\.co|cognito-forms\.com|wufoo\.com|surveymonkey\.com|share\.hsforms\.com|forms\.hubspot\.com|share\.formsite\.com|app\.getresponse\.com|mailchimp\.com|zoho\.com/i.test(html)) return true
+  if (EXTERNAL_FORM_FAST_PASS_RE.test(html)) return true
   // LINE contact links — always valid contact method
-  if (/lin\.ee\/|page\.line\.me\/|accountpage\.line\.me\/|liff\.line\.me\//i.test(html)) return true
+  if (LINE_CONTACT_RE.test(html)) return true
 
   // Reject confirmed thank-you / completion pages (no form present)
   const titleM = html.match(/<title[^>]*>([^<]*)<\/title>/i)
@@ -627,26 +629,6 @@ async function processItem(
   let formPageText: string | null = null
   let formPageTitle: string | null = null
 
-  // Domains whose presence in finalUrl means the link is NOT an inquiry form
-  const REDIRECT_REJECT_HOSTS = [
-    // Booking / reservation services
-    'coubic.com','airreserve.net','reserva.be','minimo.io',
-    'tablecheck.com','ebica.jp','toreta.in','hotpepper.jp',
-    'beauty.hotpepper.jp','select-type.com','icalendar.jp',
-    'reservestock.jp','reservia.jp',
-    'epark.jp','eparkeclinic.jp',
-    'reservawith.google.com','business.google.com',
-    'caresul.jp','freqy.jp','benri-yoyaku.jp',
-    'jalan.net','ikyu.com','booking.com','agoda.com','airbnb.com','airbnb.jp',
-    // Restaurant review / portal sites
-    'tabelog.com','gnavi.co.jp','gurunavi.com',
-    'tripadvisor.com','tripadvisor.jp',
-    'yelp.com','retty.me','loco.yahoo.co.jp',
-    // Social media
-    'facebook.com','instagram.com','twitter.com','x.com','linkedin.com',
-    'tiktok.com','youtube.com','pinterest.com','maps.google.com',
-  ]
-
   // Early reject: if the HP URL itself redirected to a booking/SNS service,
   // the company has no independent website — skip all processing.
   if (hpFetch.finalUrl && hpFetch.finalUrl !== url) {
@@ -700,7 +682,6 @@ async function processItem(
   if (fetchFormPage && extracted.formUrl && extracted.hasContactLink) {
     // LINE URLs are deep-link redirects that can't be validated via HTTP fetch.
     // Accept them directly — they were already classified as LINE by extractForms.
-    const LINE_URL_RE = /^https?:\/\/(lin\.ee|page\.line\.me|accountpage\.line\.me|liff\.line\.me)\//i
     if (LINE_URL_RE.test(extracted.formUrl)) {
       extracted.formTypeHint = 'LINE'
       return { url, baseUrl, ...extracted, formPageText, formPageTitle, error: null }
