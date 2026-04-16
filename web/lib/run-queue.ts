@@ -78,6 +78,14 @@ export function markJobDone(runId: string, status: 'completed' | 'failed', error
     if (error) job.error = error
   }
 
+  // Only start next job if we're below the concurrency limit (prevents race condition)
+  const activeCount = data.jobs.filter((j) => j.status === 'active').length
+  const maxConcurrent = data.maxConcurrent || MAX_CONCURRENT
+  if (activeCount >= maxConcurrent) {
+    writeQueue(data)
+    return undefined
+  }
+
   // Find next waiting job
   const next = data.jobs.find((j) => j.status === 'waiting')
   if (next) {
