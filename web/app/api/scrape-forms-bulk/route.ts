@@ -598,7 +598,6 @@ async function processItem(
   // Use finalUrl as the base for link resolution — handles http→https redirects and
   // domain migrations so relative links like /contact resolve to the correct origin.
   const effectiveBase = (hpFetch.finalUrl && hpFetch.finalUrl !== url) ? hpFetch.finalUrl : baseUrl
-  const extracted = extractForms(hpFetch.html, effectiveBase)
 
   // Step 3: fetch form page and validate it actually contains a contact form
   let formPageText: string | null = null
@@ -619,6 +618,23 @@ async function processItem(
     'facebook.com','instagram.com','twitter.com','x.com','linkedin.com',
     'tiktok.com','youtube.com','pinterest.com','maps.google.com',
   ]
+
+  // Early reject: if the HP URL itself redirected to a booking/SNS service,
+  // the company has no independent website — skip all processing.
+  if (hpFetch.finalUrl && hpFetch.finalUrl !== url) {
+    try {
+      const hpFinalHost = new URL(hpFetch.finalUrl).hostname.replace(/^www\./, '')
+      if (REDIRECT_REJECT_HOSTS.some((h) => hpFinalHost === h || hpFinalHost.endsWith('.' + h))) {
+        return {
+          url, baseUrl, formUrl: null, email: null, phone: null,
+          hasContactLink: false, hasInlineForm: false, hasEmailContact: false,
+          formTypeHint: null, contactLinks: [], formPageText: null, formPageTitle: null, error: null,
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  const extracted = extractForms(hpFetch.html, effectiveBase)
 
   const tryFetchAndValidate = async (targetUrl: string, cachedHtml: string | null): Promise<{ html: string; valid: boolean; finalUrl?: string } | null> => {
     try {
