@@ -464,6 +464,9 @@ function _validateFormContext(formCtx: string): boolean {
     || /textarea/i.test(formCtx)
   if (!hasUserInput) return false
 
+  // Reject login / registration forms — contact forms never have password fields
+  if (/type=["']?password/i.test(formCtx)) return false
+
   // Reject WordPress / blog CMS comment forms.
   // These have textarea + name/email but are comment sections, not inquiry forms.
   if (/(?:class|id)=["'][^"']*(?:comment[-_]?form|wp-comment|respond|leave[-_]?a[-_]?reply)[^"']*["']/i.test(formCtx)) return false
