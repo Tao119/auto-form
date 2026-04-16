@@ -391,18 +391,31 @@ function RunsSection() {
 /* ─── Maintenance Section ─────────────────────────────── */
 function MaintenanceSection() {
   const [running, setRunning] = useState(false)
-  const [result, setResult] = useState<{ staleRunsExpired: number; walCheckpointPages: number; vacuumDone: boolean; dbSizeBytes: number } | null>(null)
+  const [result, setResult] = useState<{
+    staleRunsExpired: number; walCheckpointPages: number; vacuumDone: boolean
+    dbSizeBytes: number; prunedRows?: number
+  } | null>(null)
   const [error, setError] = useState('')
+  const [pruneEnabled, setPruneEnabled] = useState(false)
+  const [pruneDays, setPruneDays] = useState(90)
 
-  const handleRun = async () => {
+  const handleRun = async (withPrune = false) => {
     setRunning(true)
     setError('')
     setResult(null)
     try {
-      const r = await fetch('/api/admin/maintenance', { method: 'POST' })
+      const body = withPrune ? JSON.stringify({ prune: true, daysOld: pruneDays }) : '{}'
+      const r = await fetch('/api/admin/maintenance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      })
       const d = await r.json()
       if (d.success) {
-        setResult({ staleRunsExpired: d.staleRunsExpired, walCheckpointPages: d.walCheckpointPages, vacuumDone: d.vacuumDone, dbSizeBytes: d.dbSizeBytes })
+        setResult({
+          staleRunsExpired: d.staleRunsExpired, walCheckpointPages: d.walCheckpointPages,
+          vacuumDone: d.vacuumDone, dbSizeBytes: d.dbSizeBytes, prunedRows: d.prunedRows,
+        })
       } else {
         setError(d.error || 'メンテナンス失敗')
       }
@@ -423,17 +436,52 @@ function MaintenanceSection() {
         WALチェックポイントとVACUUMを実行してディスク使用量を最適化します。
         大量削除後や定期的に実行することを推奨します。
       </p>
+
+      {/* Prune option */}
+      <div className="mb-4 p-3 bg-gray-50 rounded border border-gray-200">
+        <label className="flex items-center gap-2 cursor-pointer mb-2">
+          <input
+            type="checkbox"
+            checked={pruneEnabled}
+            onChange={(e) => setPruneEnabled(e.target.checked)}
+            className="rounded"
+          />
+          <span className="text-xs font-medium text-gray-700">古い完了データを削除</span>
+        </label>
+        {pruneEnabled && (
+          <div className="flex items-center gap-2 mt-2 ml-5">
+            <span className="text-xs text-gray-500">送信済み・スキップ済みのデータのうち</span>
+            <input
+              type="number"
+              value={pruneDays}
+              onChange={(e) => setPruneDays(Math.max(7, parseInt(e.target.value) || 90))}
+              min={7}
+              className="w-16 bg-white border border-gray-300 rounded px-2 py-1 text-xs text-center focus:border-blue-500 focus:outline-none"
+            />
+            <span className="text-xs text-gray-500">日以上前のものを削除</span>
+          </div>
+        )}
+        {pruneEnabled && (
+          <p className="text-xs text-amber-600 mt-2 ml-5">
+            ※ 未送信・エラー状態のデータは削除されません
+          </p>
+        )}
+      </div>
+
       {error && <div className="text-red-600 text-sm mb-3">{error}</div>}
       {result && (
         <div className="text-xs text-gray-600 bg-gray-50 rounded p-3 mb-3 space-y-1">
           <div>✓ VACUUM 完了</div>
           <div>✓ WAL チェックポイント: {result.walCheckpointPages} ページ</div>
           <div>✓ 失効ラン自動終了: {result.staleRunsExpired} 件</div>
+          {result.prunedRows !== undefined && result.prunedRows > 0 && (
+            <div>✓ 古いデータ削除: {result.prunedRows.toLocaleString()} 件</div>
+          )}
           <div>✓ DB サイズ: {(result.dbSizeBytes / 1024).toFixed(1)} KB</div>
         </div>
       )}
       <button
-        onClick={handleRun}
+        onClick={() => handleRun(pruneEnabled)}
         disabled={running}
         className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-gray-700 hover:bg-gray-800 disabled:bg-gray-400 text-white rounded transition-colors"
       >
