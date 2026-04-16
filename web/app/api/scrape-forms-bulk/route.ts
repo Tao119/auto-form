@@ -66,12 +66,16 @@ const EXTERNAL_FORM_HOSTS = [
   'app.getresponse.com',
   'lin.ee','page.line.me','accountpage.line.me','liff.line.me',
   'mailchimp.com','zoho.com',
+  // Additional services
+  'forms.office.com','forms.microsoft.com',
+  '123formbuilder.com','formassembly.com',
+  'forms.app','tripetto.app',
 ]
 // URL path suffixes that clearly indicate non-contact pages.
 // Trailing boundary (\/|\.|\?|$) prevents partial matches: /recruit-info is NOT rejected.
-const NON_CONTACT_SUFFIX_RE = /\/(privacy[-_]?(?:policy)?|terms?(?:[-_]of[-_]service)?|sitemap|blog|news|articles?|posts?|shop|cart|login|sign[-_]?up|register|logout|faq|access(?:map)?|recruit(?:ment)?|career|jobs?|about(?:-us)?|company|profile|gallery|works|portfolio|media|press)(?:\/|\.|\?|$)/i
+const NON_CONTACT_SUFFIX_RE = /\/(privacy[-_]?(?:policy)?|terms?(?:[-_]of[-_]service)?|sitemap|blog|news|articles?|posts?|column|archive|categories?|shop|cart|login|sign[-_]?up|register|logout|faq|access(?:map)?|recruit(?:ment)?|career|jobs?|about(?:-us)?|company|profile|gallery|works|portfolio|media|press|staff|team|members?|events?|downloads?|videos?|photos?|voice(?:s)?)(?:\/|\.|\?|$)/i
 // URL segment patterns that strongly suggest a dedicated contact page
-const URL_SEGMENT_RE = /(?:^|\/)(contact|inquiry|toiawase|otoiawase|mailform|ask-us|askus|feedback|renraku|goiken|iawase|gorenraku|gosodan)(?:\/|\.|\?|_|-|$)/i
+const URL_SEGMENT_RE = /(?:^|\/)(contact|inquiry|toiawase|otoiawase|mailform|ask-us|askus|feedback|renraku|goiken|iawase|gorenraku|gosodan|soudan|meiru|consultation|message|contactus|contactform|inquiryform)(?:\/|\.|\?|_|-|$)/i
 const URL_LOOSE_RE = /(?:%E3%81%8A%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B|%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B|%E3%81%94%E7%9B%B8%E8%AB%87|%E3%81%94%E9%80%A3%E7%B5%A1|cgi-bin|cgi\/)/i
 // LINE deep-link patterns — always valid contact method, skip HTTP validation
 const LINE_HINT_PATTERNS = [/lin\.ee\//i, /page\.line\.me\//i, /accountpage\.line\.me\//i, /liff\.line\.me\//i]
@@ -94,7 +98,7 @@ const REDIRECT_REJECT_HOSTS = [
   'tiktok.com','youtube.com','pinterest.com','maps.google.com',
 ]
 // Fast-pass for known external form SaaS — page is a valid contact form without further analysis
-const EXTERNAL_FORM_FAST_PASS_RE = /docs\.google\.com\/forms|forms\.gle|form\.run|formrun\.com|typeform\.com|jotform\.com|tayori\.com|formstack\.com|formzu\.net|form\.kintoneapp|kintone\.com|freeml\.net|mailform\.jp|mfcontact\.com|mfcontacts\.com|formmailer\.jp|tally\.so|paperform\.co|cognito-forms\.com|wufoo\.com|surveymonkey\.com|share\.hsforms\.com|forms\.hubspot\.com|share\.formsite\.com|app\.getresponse\.com|mailchimp\.com|zoho\.com/i
+const EXTERNAL_FORM_FAST_PASS_RE = /docs\.google\.com\/forms|forms\.gle|form\.run|formrun\.com|typeform\.com|jotform\.com|tayori\.com|formstack\.com|formzu\.net|form\.kintoneapp|kintone\.com|freeml\.net|mailform\.jp|mfcontact\.com|mfcontacts\.com|formmailer\.jp|tally\.so|paperform\.co|cognito-forms\.com|wufoo\.com|surveymonkey\.com|share\.hsforms\.com|forms\.hubspot\.com|share\.formsite\.com|app\.getresponse\.com|mailchimp\.com|zoho\.com|forms\.office\.com|forms\.microsoft\.com|123formbuilder\.com|formassembly\.com|forms\.app|tripetto\.app/i
 
 const Schema = z.object({
   items: z.array(z.object({
@@ -600,14 +604,20 @@ const PROBE_PATHS = [
   // WordPress / common CMS slugs
   '/contact-us', '/contact-us/', '/contact_us', '/contactus', '/get-in-touch', '/send-message',
   '/contact-form', '/contact-form/',
+  '/inquiry-form', '/inquiry_form', '/contactform',
+  '/message', '/message/', '/ask', '/consultation', '/consultation/',
+  '/free-consultation', '/free-consultation/',
+  // Japanese romaji: soudan (相談), meiru (メール), renraku (連絡)
+  '/soudan', '/soudan/', '/meiru', '/meiru/',
   // Shopify / Square Online: pages are nested under /pages/
   '/pages/contact', '/pages/inquiry', '/pages/contact-us',
+  '/pages/message', '/pages/form', '/pages/mailform',
   // URL-encoded Japanese paths
   '/%E3%81%8A%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B',  // /お問い合わせ
   '/%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B',            // /問い合わせ
   '/%E3%81%8A%E5%95%8F%E5%90%88%E3%81%9B',                     // /お問合せ
 ]
-const PROBE_LIMIT = 12  // max paths to probe per site
+const PROBE_LIMIT = 15  // max paths to probe per site
 
 async function processItem(
   url: string,
@@ -811,6 +821,10 @@ async function processItem(
       if (probeText.length < 300) continue
       // 5. Near-identical text content prefix to HP → CMS serving same page at all paths (soft-404)
       if (hpTextPrefix.length > 100 && probeText.slice(0, 400) === hpTextPrefix) continue
+      // 6. Body text opens with a "page not found" message (custom 200 soft-404 pages)
+      //    Check only the first 600 chars of stripped text to avoid false negatives on valid pages
+      //    that discuss 404 errors tangentially.
+      if (/お探しのページ.*見つかり|このページ.*存在しません|ページが見つかりません|存在しないページ|page not found|404 error/i.test(probeText.slice(0, 600))) continue
       // ───────────────────────────────────────────────────────────────
 
       if (!validateFormPage(probeHtml)) continue
