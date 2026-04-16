@@ -9,6 +9,20 @@ import {
 } from 'lucide-react'
 import type { CompanyRow, Project, ProjectRun } from '@/lib/types'
 
+function relativeTime(iso: string): string {
+  if (!iso) return '-'
+  const diff = Date.now() - new Date(iso).getTime()
+  if (isNaN(diff)) return iso
+  const mins  = Math.floor(diff / 60_000)
+  const hours = Math.floor(diff / 3_600_000)
+  const days  = Math.floor(diff / 86_400_000)
+  if (mins  < 1)   return 'たった今'
+  if (mins  < 60)  return `${mins}分前`
+  if (hours < 24)  return `${hours}時間前`
+  if (days  < 7)   return `${days}日前`
+  return new Date(iso).toLocaleDateString('ja-JP', { month: 'short', day: 'numeric' })
+}
+
 const STATUS_OPTIONS = ['全て', '未送信', '送信済み', 'エラー', 'スキップ']
 const FORM_TYPE_OPTIONS: Array<{ label: string; value: string }> = [
   { label: '種別: 全て', value: '' },
@@ -104,17 +118,25 @@ export default function ProjectResultsPage() {
     saveFilters(projectId, { ...filters, runId: selectedRunId, sortBy, sortDir })
   }, [projectId, _filterRestored, filters, selectedRunId, sortBy, sortDir])
 
-  // Press '/' to focus search input
+  // Keyboard shortcuts:
+  //   '/'       → focus search input
+  //   Escape    → deselect all rows (when not in an input)
+  //   ArrowLeft → previous page
+  //   ArrowRight→ next page
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === '/' && !e.metaKey && !e.ctrlKey && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
+      const inInput = document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA'
+      if (e.key === '/' && !e.metaKey && !e.ctrlKey && !inInput) {
         e.preventDefault()
         searchInputRef.current?.focus()
+      }
+      if (e.key === 'Escape' && !inInput && selectedIds.size > 0) {
+        setSelectedIds(new Set())
       }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [])
+  }, [selectedIds])
 
   // Debounce search input to avoid hammering the API on every keystroke
   useEffect(() => {
@@ -673,7 +695,7 @@ export default function ProjectResultsPage() {
                         <span className="text-gray-400 text-xs">{row['備考'] || '-'}</span>
                       )}
                     </td>
-                    <td className="px-3 py-2.5 text-gray-400 text-xs whitespace-nowrap">{row['収集日時'] || '-'}</td>
+                    <td className="px-3 py-2.5 text-gray-400 text-xs whitespace-nowrap" title={row['収集日時'] || ''}>{row['収集日時'] ? relativeTime(row['収集日時']) : '-'}</td>
                     {!selectedRunId && (
                       <td className="px-3 py-2.5 text-gray-400 text-xs whitespace-nowrap max-w-[120px] truncate" title={run?.label}>
                         {run?.label || row['実行ID'] || '-'}
