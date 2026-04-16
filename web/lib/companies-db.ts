@@ -128,6 +128,10 @@ function getDb(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_companies_runId            ON companies(runId);
     CREATE INDEX IF NOT EXISTS idx_companies_industry         ON companies(industry);
     CREATE INDEX IF NOT EXISTS idx_companies_area             ON companies(area);
+    CREATE INDEX IF NOT EXISTS idx_companies_status           ON companies(status);
+    CREATE INDEX IF NOT EXISTS idx_companies_formType         ON companies(formType);
+    CREATE INDEX IF NOT EXISTS idx_companies_collectedAt      ON companies(collectedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_companies_formUrl_ne       ON companies(projectId, formUrl) WHERE formUrl != '';
   `)
   // Migration: add normalizedHpUrl column for existing DBs (ignored if column already exists)
   try { _db.exec(`ALTER TABLE companies ADD COLUMN normalizedHpUrl TEXT NOT NULL DEFAULT ''`) } catch {}

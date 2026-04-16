@@ -734,6 +734,13 @@ function FormTypeBadge({ type }: { type: string }) {
       </span>
     )
   }
+  if (type === 'unknown') {
+    return (
+      <span className="inline-block px-2 py-0.5 rounded text-xs border bg-gray-50 text-gray-500 border-gray-300">
+        不明
+      </span>
+    )
+  }
   return <span className="text-gray-400 text-xs">{type || '-'}</span>
 }
 

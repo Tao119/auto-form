@@ -274,8 +274,9 @@ function extractForms(html: string, baseUrl: string): {
     if (URL_SEGMENT_RE.test(lUrl) || URL_LOOSE_RE.test(lUrl)) score += 8
     // Japanese URL keywords (highly specific, substring match is safe)
     if (lUrl.includes('お問い合わせ') || lUrl.includes('問い合わせ') || lUrl.includes('ご相談') || lUrl.includes('ご連絡')) score += 8
-    // CGI form pattern
+    // CGI form patterns common on Japanese sites (.cgi, .pl contact scripts)
     if (/\/cgi(-bin)?\/.*form/i.test(absoluteUrl)) score += 12
+    if (/\/(mailform|form[_-]?mail|contact[_-]?form|inquiry|toiawase)\.(?:cgi|pl|php|aspx?)(?:\?|$)/i.test(absoluteUrl)) score += 10
     if (isExternal) score += 15
 
     // Require at least a URL keyword match (8) OR a strong text match (10) to accept
