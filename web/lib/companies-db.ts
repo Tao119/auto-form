@@ -80,20 +80,42 @@ export function isLineUrl(url: string): boolean {
 }
 
 // Tracking query parameters that should be stripped before URL normalization / dedup.
-const NORM_TRACKING_PARAMS = ['utm_source','utm_medium','utm_campaign','utm_term','utm_content','fbclid','gclid','msclkid','ref','from','_ga','_gl','yclid','twclid']
+// Includes: standard UTM/ad tracking, LINE display params (openQrModal, oat_content),
+// mypl.net skin param, and other non-identifying UI/referral params.
+const NORM_TRACKING_PARAMS = [
+  // Standard ad/analytics tracking
+  'utm_source','utm_medium','utm_campaign','utm_term','utm_content',
+  'fbclid','gclid','msclkid','ref','from','_ga','_gl','yclid','twclid',
+  // LINE URL display-only params (do not distinguish LINE accounts)
+  'openqrmodal','oat_content','oat__ck',
+  // mypl.net / portal skin param
+  'skin',
+  // Google Business Profile referral
+  'site_code','SITE_CODE',
+  // WordPress page ID (when used as the sole query param on a contact/form page,
+  // the path already identifies the page uniquely; stripping prevents dedup misses
+  // caused by inconsistent normalization across collection rounds)
+  'page_id',
+]
 
 // ── URL normalization ──────────────────────────────────────────────
 export function normalizeUrl(url: string): string {
   if (!url) return ''
+  // Pre-process: decode HTML entities (&amp; → &) before URL parsing
+  const decoded = url.replace(/&amp;/gi, '&')
   try {
-    const u = new URL(url)
-    // Strip known tracking query parameters before dedup comparison
-    NORM_TRACKING_PARAMS.forEach((p) => u.searchParams.delete(p))
+    const u = new URL(decoded)
+    // Strip known tracking/display query parameters before dedup comparison
+    // Use case-insensitive matching since params may vary in casing across sources
+    const toDelete = [...u.searchParams.keys()].filter((k) =>
+      NORM_TRACKING_PARAMS.some((p) => p.toLowerCase() === k.toLowerCase())
+    )
+    toDelete.forEach((k) => u.searchParams.delete(k))
     // Build normalized key: host + path (strip scheme, www, trailing slash)
     const path = u.pathname.replace(/\/+$/, '').replace(/\/{2,}/g, '/') + (u.search || '')
     return (u.hostname + path).toLowerCase().replace(/^www\./, '')
   } catch {
-    return url.toLowerCase().trim()
+    return decoded.toLowerCase().trim()
   }
 }
 
@@ -180,13 +202,60 @@ function getDb(): Database.Database {
         OR formUrl LIKE '%://riyou.jp/%'
         OR formUrl LIKE '%://stekina.com/%'
         OR formUrl LIKE '%://haisha-yoyaku.jp/%'
+        OR formUrl LIKE '%://ssl.haisha-yoyaku.jp/%'
         OR formUrl LIKE '%://eparkdentist.com/%'
         OR formUrl LIKE '%dentamap.jp/%'
         OR formUrl LIKE '%://ekiten.jp/%'
         OR formUrl LIKE '%b-merit.jp%'
         OR (formUrl LIKE '%coubic.com%' AND formUrl NOT LIKE '%/contact%')
+        OR (formUrl LIKE '%airrsv.net%' AND formUrl LIKE '%/calendar%')
+        OR formUrl LIKE '%://epark.jp/shopinfo/%'
       )
   `)
+  // Migration: re-normalize URLs where display params leaked into normalizedFormUrl.
+  // Affects LINE URLs (?openQrModal, ?oat_content) and mypl.net (?skin=) that were
+  // inserted before those params were added to NORM_TRACKING_PARAMS.
+  // This re-normalizes ~245 affected records and then removes the duplicates that result.
+  {
+    type Row = { id: string; formUrl: string; normalizedFormUrl: string }
+    const stale = _db.prepare(`
+      SELECT id, formUrl, normalizedFormUrl FROM companies
+      WHERE normalizedFormUrl LIKE '%openqrmodal%'
+         OR normalizedFormUrl LIKE '%oat_content%'
+         OR normalizedFormUrl LIKE '%oat__%'
+         OR normalizedFormUrl LIKE '%skin=%'
+         OR normalizedFormUrl LIKE '%site_code%'
+    `).all() as Row[]
+
+    if (stale.length > 0) {
+      const update = _db.prepare(`UPDATE companies SET normalizedFormUrl = ? WHERE id = ?`)
+      const doUpdates = _db.transaction((rows: Row[]) => {
+        for (const row of rows) {
+          const newNorm = normalizeUrl(row.formUrl)
+          if (newNorm !== row.normalizedFormUrl) update.run(newNorm, row.id)
+        }
+      })
+      doUpdates(stale)
+
+      // Remove duplicate records that now share the same normalizedFormUrl.
+      // Keep the one with the earlier collectedAt (or smaller id as tiebreaker).
+      _db.exec(`
+        DELETE FROM companies
+        WHERE id IN (
+          SELECT id FROM (
+            SELECT id,
+                   ROW_NUMBER() OVER (
+                     PARTITION BY normalizedFormUrl
+                     ORDER BY COALESCE(NULLIF(collectedAt,''), '9999') ASC, id ASC
+                   ) as rn
+            FROM companies
+            WHERE normalizedFormUrl != ''
+          )
+          WHERE rn > 1
+        )
+      `)
+    }
+  }
   return _db
 }
 
