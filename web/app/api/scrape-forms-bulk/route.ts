@@ -267,8 +267,12 @@ function cleanHtmlToText(html: string): string {
 }
 
 function extractTitle(html: string): string {
-  const m = html.match(/<title[^>]*>([^<]*)<\/title>/i)
-  return m ? m[1].trim() : ''
+  const m = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)
+  if (!m) return ''
+  return m[1]
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ').trim()
 }
 
 function extractForms(html: string, baseUrl: string): {
