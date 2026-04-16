@@ -81,6 +81,9 @@ export default function ExecutePanel() {
   const [selectedProjectId, setSelectedProjectId] = useState<string>('')
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [queueStats, setQueueStats] = useState<{ active: number; waiting: number; maxConcurrent: number } | null>(null)
+  const [presetNameInput, setPresetNameInput] = useState('')
+  const [showPresetNameInput, setShowPresetNameInput] = useState(false)
+  const [savingPreset, setSavingPreset] = useState(false)
 
   const actualIndustry = industry === 'その他' ? customIndustry : industry
   const isRunning = status === 'running' || status === 'queued'
@@ -313,19 +316,27 @@ export default function ExecutePanel() {
     setShowPresets(false)
   }
 
-  const saveCurrentAsPreset = async () => {
-    const name = prompt('プリセット名を入力してください:')
+  const commitSavePreset = async () => {
+    const name = presetNameInput.trim()
     if (!name) return
-    const keywords = KEYWORDS_MAP[actualIndustry] || [actualIndustry]
-    const area = selectedAreas.length === 1 ? selectedAreas[0] : selectedAreas.join(',')
-    await fetch('/api/config/presets', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, searchTarget: { industry: actualIndustry, area, keywords } }),
-    })
-    const r = await fetch('/api/config/presets')
-    const d = await r.json()
-    if (d.success) setPresets(d.data)
+    setSavingPreset(true)
+    try {
+      const keywords = KEYWORDS_MAP[actualIndustry] || [actualIndustry]
+      const area = selectedAreas.length === 1 ? selectedAreas[0] : selectedAreas.join(',')
+      await fetch('/api/config/presets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, searchTarget: { industry: actualIndustry, area, keywords } }),
+      })
+      const r = await fetch('/api/config/presets')
+      const d = await r.json()
+      if (d.success) setPresets(d.data)
+    } finally {
+      setSavingPreset(false)
+      setPresetNameInput('')
+      setShowPresetNameInput(false)
+      setShowPresets(false)
+    }
   }
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId)
@@ -376,9 +387,30 @@ export default function ExecutePanel() {
                 ))
               )}
               <div className="border-t border-gray-100 px-3 py-2">
-                <button onClick={saveCurrentAsPreset} className="text-xs text-blue-600 hover:text-blue-800">
-                  現在の設定を保存
-                </button>
+                {showPresetNameInput ? (
+                  <div className="flex gap-1">
+                    <input
+                      type="text"
+                      value={presetNameInput}
+                      onChange={(e) => setPresetNameInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') commitSavePreset(); if (e.key === 'Escape') { setShowPresetNameInput(false); setPresetNameInput('') } }}
+                      placeholder="プリセット名..."
+                      autoFocus
+                      className="flex-1 text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:border-blue-400"
+                    />
+                    <button
+                      onClick={commitSavePreset}
+                      disabled={savingPreset || !presetNameInput.trim()}
+                      className="text-xs bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white rounded px-2 py-1 transition-colors"
+                    >
+                      {savingPreset ? '...' : '保存'}
+                    </button>
+                  </div>
+                ) : (
+                  <button onClick={() => setShowPresetNameInput(true)} className="text-xs text-blue-600 hover:text-blue-800">
+                    現在の設定を保存
+                  </button>
+                )}
               </div>
             </div>
           )}
