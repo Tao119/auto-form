@@ -82,7 +82,7 @@ function fetchUrl(rawUrl: string, timeoutMs: number, _depth = 0): Promise<FetchR
         'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
         'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8',
         'Accept-Language': 'ja,en;q=0.5',
-        'Accept-Encoding': 'gzip, deflate',
+        'Accept-Encoding': 'gzip, deflate, br',
         'Connection': 'keep-alive',
       },
     }
@@ -136,6 +136,8 @@ function fetchUrl(rawUrl: string, timeoutMs: number, _depth = 0): Promise<FetchR
             zlib.gunzip(rawBuf, (err, decoded) => processHtml(err ? rawBuf.toString('utf8') : decoded.toString('utf8')))
           } else if (encoding === 'deflate') {
             zlib.inflate(rawBuf, (err, decoded) => processHtml(err ? rawBuf.toString('utf8') : decoded.toString('utf8')))
+          } else if (encoding === 'br') {
+            zlib.brotliDecompress(rawBuf, (err, decoded) => processHtml(err ? rawBuf.toString('utf8') : decoded.toString('utf8')))
           } else {
             processHtml(rawBuf.toString('utf8'))
           }
@@ -305,7 +307,8 @@ function extractForms(html: string, baseUrl: string): {
       absoluteUrl = new URL(rawHref, baseUrl).toString()
       const baseHost = new URL(baseUrl).hostname.replace(/^www\./, '')
       linkHost = new URL(absoluteUrl).hostname.replace(/^www\./, '')
-      isExternal = baseHost !== linkHost
+      // Treat same-domain subdomains as internal (e.g. form.example.co.jp for example.co.jp)
+      isExternal = baseHost !== linkHost && !linkHost.endsWith('.' + baseHost)
       // Immediately reject known non-form domains (SNS, maps, e-commerce, etc.)
       if (ALWAYS_REJECT_HOSTS.some((h) => linkHost === h || linkHost.endsWith('.' + h))) continue
       if (isExternal && !EXTERNAL_FORM_HOSTS.some((h) => linkHost.includes(h))) continue
@@ -344,6 +347,11 @@ function extractForms(html: string, baseUrl: string): {
     if (/\/cgi(-bin)?\/.*form/i.test(absoluteUrl)) score += 12
     if (/\/(mailform|form[_-]?mail|contact[_-]?form|inquiry|toiawase)\.(?:cgi|pl|php|aspx?)(?:\?|$)/i.test(absoluteUrl)) score += 10
     if (isExternal) score += 15
+    // Subdomain contact bonus: contact.example.co.jp or form.example.co.jp
+    if (!isExternal) {
+      const linkSubdomain = new URL(absoluteUrl).hostname.split('.')[0].toLowerCase()
+      if (/^(contact|inquiry|form|mail|toiawase|otoiawase)$/.test(linkSubdomain)) score += 8
+    }
 
     // Score boost for links that appear inside a <footer> element
     // (contact links in footers are very common on Japanese business sites)
@@ -586,7 +594,10 @@ async function processItem(
   }
 
   // Step 2: extract form links
-  const extracted = extractForms(hpFetch.html, baseUrl)
+  // Use finalUrl as the base for link resolution — handles http→https redirects and
+  // domain migrations so relative links like /contact resolve to the correct origin.
+  const effectiveBase = (hpFetch.finalUrl && hpFetch.finalUrl !== url) ? hpFetch.finalUrl : baseUrl
+  const extracted = extractForms(hpFetch.html, effectiveBase)
 
   // Step 3: fetch form page and validate it actually contains a contact form
   let formPageText: string | null = null
@@ -644,7 +655,7 @@ async function processItem(
     }
 
     // If formUrl is the HP itself (inline form), reuse the already-fetched HTML
-    const isInlinePage = extracted.formUrl === baseUrl
+    const isInlinePage = extracted.formUrl === effectiveBase || extracted.formUrl === baseUrl
     const formHtml = isInlinePage ? hpFetch.html : null
 
     const primary = await tryFetchAndValidate(extracted.formUrl, formHtml)
@@ -697,15 +708,27 @@ async function processItem(
   // for any unknown path (common on Japanese CMS-based sites).
   if (fetchFormPage && !extracted.hasContactLink) {
     let baseOrigin: string
-    try { baseOrigin = new URL(baseUrl).origin } catch { return { url, baseUrl, ...extracted, formPageText, formPageTitle, error: null } }
+    // Use the redirected URL's origin so probes resolve to the correct server (e.g. https after http→https redirect)
+    try { baseOrigin = new URL(effectiveBase).origin } catch { return { url, baseUrl, ...extracted, formPageText, formPageTitle, error: null } }
 
     const hpTitle = extractTitle(hpFetch.html).trim().toLowerCase()
     const hpLen = hpFetch.html.length
-    const hpNorm = baseUrl.replace(/\/$/, '').toLowerCase()
+    const hpNorm = effectiveBase.replace(/\/$/, '').toLowerCase()
+
+    // Build set of URL paths already tried as contact link candidates — skip duplicates in probe loop
+    const triedPaths = new Set<string>()
+    if (extracted.formUrl) {
+      try { triedPaths.add(new URL(extracted.formUrl).pathname.toLowerCase()) } catch {}
+    }
+    for (const link of extracted.contactLinks) {
+      try { triedPaths.add(new URL(link.url).pathname.toLowerCase()) } catch {}
+    }
 
     let probed = 0
     for (const suffix of PROBE_PATHS) {
       if (probed >= PROBE_LIMIT) break
+      // Skip paths already tried as contact link candidates to avoid redundant fetches
+      if (triedPaths.has(suffix.toLowerCase())) continue
       probed++
       const probeUrl = baseOrigin + suffix
 

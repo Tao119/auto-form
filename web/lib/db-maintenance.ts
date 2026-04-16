@@ -2,6 +2,7 @@
  * DB housekeeping utilities.
  * Runs VACUUM + WAL checkpoint to reclaim disk space and keep the
  * SQLite WAL file from growing unbounded on long-running deployments.
+ * Also provides pruning of old completed-job data.
  */
 import Database from 'better-sqlite3'
 import path from 'path'
@@ -14,6 +15,50 @@ export interface MaintenanceResult {
   walCheckpointPages: number
   vacuumDone: boolean
   dbSizeBytes: number
+  prunedRows?: number
+}
+
+export interface PruneOptions {
+  /** Delete rows older than this many days (default: 90) */
+  daysOld?: number
+  /**
+   * Only delete rows with these statuses (default: ['送信済み', 'スキップ'])
+   * Pass [] to delete regardless of status.
+   */
+  statuses?: string[]
+}
+
+/**
+ * Delete old company rows to keep the DB lean.
+ * Only removes rows that are older than `daysOld` AND have an end-state status,
+ * so in-progress or未送信 rows are never auto-deleted.
+ */
+export function pruneOldData(opts: PruneOptions = {}): number {
+  if (!fs.existsSync(DB_FILE)) return 0
+
+  const daysOld = opts.daysOld ?? 90
+  const statuses = opts.statuses ?? ['送信済み', 'スキップ']
+
+  const cutoff = new Date()
+  cutoff.setDate(cutoff.getDate() - daysOld)
+  const cutoffIso = cutoff.toISOString()
+
+  const db = new Database(DB_FILE)
+  db.pragma('journal_mode = WAL')
+  try {
+    let result: { changes: number }
+    if (statuses.length === 0) {
+      result = db.prepare('DELETE FROM companies WHERE collectedAt < ?').run(cutoffIso)
+    } else {
+      const placeholders = statuses.map(() => '?').join(', ')
+      result = db.prepare(
+        `DELETE FROM companies WHERE collectedAt < ? AND status IN (${placeholders})`
+      ).run(cutoffIso, ...statuses)
+    }
+    return result.changes
+  } finally {
+    db.close()
+  }
 }
 
 export function runMaintenance(): MaintenanceResult {

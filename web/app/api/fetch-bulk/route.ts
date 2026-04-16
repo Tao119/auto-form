@@ -51,7 +51,7 @@ function fetchUrl(rawUrl: string, timeoutMs: number): Promise<FetchResult> {
         'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
         'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8',
         'Accept-Language': 'ja,en;q=0.5',
-        'Accept-Encoding': 'gzip, deflate',
+        'Accept-Encoding': 'gzip, deflate, br',
         'Connection': 'keep-alive',
       },
     }
@@ -89,6 +89,8 @@ function fetchUrl(rawUrl: string, timeoutMs: number): Promise<FetchResult> {
             zlib.gunzip(rawBuf, (err, decoded) => finish(err ? rawBuf.toString('utf8') : decoded.toString('utf8')))
           } else if (encoding === 'deflate') {
             zlib.inflate(rawBuf, (err, decoded) => finish(err ? rawBuf.toString('utf8') : decoded.toString('utf8')))
+          } else if (encoding === 'br') {
+            zlib.brotliDecompress(rawBuf, (err, decoded) => finish(err ? rawBuf.toString('utf8') : decoded.toString('utf8')))
           } else {
             finish(rawBuf.toString('utf8'))
           }
