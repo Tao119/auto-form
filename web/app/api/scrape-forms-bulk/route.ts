@@ -507,6 +507,12 @@ function _validateFormContext(formCtx: string): boolean {
   // The 800-char pre-window often contains headings like "お問い合わせ"
   // right above the form — strong signal for contact forms.
   if (/textarea/i.test(formCtx)) {
+    // Reject reservation forms: has strong booking signal but no inquiry keywords.
+    // This prevents beauty-salon reservation embeds (with name/email/textarea for "special requests")
+    // from being misclassified as contact forms.
+    if (/予約フォーム|ご予約|ネット予約|reservation form|booking form|book now/i.test(formCtx) &&
+        !/お問い合わせ|ご連絡|ご相談|inquiry|contact/i.test(formCtx)) return false
+
     const INQUIRY_KW = /お問い合わせ|ご連絡|ご相談|お問合|inquiry|contact us|contact form|ご質問|お問い合わせ内容|お問合せ内容|メッセージ内容|ご意見/i
     if (INQUIRY_KW.test(formCtx)) return true
     const hasNameField = /<input[^>]+(name|id)=["']?(?:name|your[_-]?name|お名前|namae)/i.test(formCtx)
