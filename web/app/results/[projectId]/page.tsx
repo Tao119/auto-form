@@ -80,7 +80,9 @@ export default function ProjectResultsPage() {
   const [_filterRestored, setFilterRestored] = useState(false)
 
   const [project, setProject] = useState<ProjectDetail | null>(null)
-  const [selectedRunId, setSelectedRunId] = useState<string>('')
+  // Initialize from URL param so the very first fetchData already has the correct runId.
+  // Without this, the initial fetch fires with '' before the filter-restore effect runs.
+  const [selectedRunId, setSelectedRunId] = useState<string>(() => searchParams.get('run') ?? '')
   const [rows, setRows] = useState<CompanyRow[]>([])
   const [meta, setMeta] = useState<Meta>({ total: 0, formCount: 0, phoneCount: 0, emailCount: 0, page: 1, limit: 100, industries: [], areas: [] })
   const [filters, setFilters] = useState<FilterState>({ industry: '', area: '', status: '', formType: '', hasForm: '', hasPhone: '', hasEmail: '', search: '' })
@@ -118,11 +120,10 @@ export default function ProjectResultsPage() {
         search: '',  // never restore search — too stale
       })
     }
-    // URL param ?run= overrides localStorage (direct link from history page)
+    // URL param ?run= is already applied as the useState initial value.
+    // Only restore from localStorage when there is no URL param.
     const runParam = searchParams.get('run')
-    if (runParam) {
-      setSelectedRunId(runParam)
-    } else if (saved.runId !== undefined) {
+    if (!runParam && saved.runId !== undefined) {
       setSelectedRunId(saved.runId)
     }
     if (saved.sortBy) setSortBy(saved.sortBy)
@@ -210,8 +211,9 @@ export default function ProjectResultsPage() {
     setError('')
     try {
       const params = new URLSearchParams({ page: String(p), limit: '100', sortBy, sortDir })
-      if (selectedRunId) params.set('runId', selectedRunId)
-      else params.set('projectId', projectId)
+      // Always query by projectId so all runs' data is visible.
+      // selectedRunId is used only for tab highlighting and run stats — not as a data filter.
+      params.set('projectId', projectId)
       if (filters.industry) params.set('industry', filters.industry)
       if (filters.area) params.set('area', filters.area)
       if (filters.status) params.set('status', filters.status)
@@ -243,7 +245,7 @@ export default function ProjectResultsPage() {
     } finally {
       setLoading(false)
     }
-  }, [projectId, selectedRunId, filters.industry, filters.area, filters.status, filters.formType, filters.hasForm, filters.hasPhone, filters.hasEmail, debouncedSearch, sortBy, sortDir])
+  }, [projectId, filters.industry, filters.area, filters.status, filters.formType, filters.hasForm, filters.hasPhone, filters.hasEmail, debouncedSearch, sortBy, sortDir])
 
   useEffect(() => { fetchData(1) }, [fetchData])
 
@@ -275,8 +277,7 @@ export default function ProjectResultsPage() {
     setExporting(true)
     try {
       const params = new URLSearchParams()
-      if (selectedRunId) params.set('runId', selectedRunId)
-      else params.set('projectId', projectId)
+      params.set('projectId', projectId)
       if (filters.industry) params.set('industry', filters.industry)
       if (filters.area) params.set('area', filters.area)
       if (filters.status) params.set('status', filters.status)
@@ -380,7 +381,7 @@ export default function ProjectResultsPage() {
       const payload = selectAllPages
         ? {
             filter: {
-              ...(selectedRunId ? { runId: selectedRunId } : { projectId }),
+              projectId,
               ...(filters.industry ? { industry: filters.industry } : {}),
               ...(filters.area     ? { area: filters.area }         : {}),
               ...(filters.status   ? { status: filters.status }     : {}),
