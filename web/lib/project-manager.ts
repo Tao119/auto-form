@@ -136,12 +136,22 @@ export interface RunStatusUpdate {
  * Mark runs that have been in 'running' state for longer than maxAgeMs as 'error'.
  * Called lazily from getQueueStatus to keep stale runs from blocking the UI.
  */
-export function expireStaleRuns(maxAgeMs = 2 * 60 * 60 * 1000): number {
+export function expireStaleRuns(
+  runningMaxAgeMs = 2 * 60 * 60 * 1000,   // 2h for running (n8n should finish by then)
+  pendingMaxAgeMs = 24 * 60 * 60 * 1000,  // 24h for pending (queue stale guard)
+): number {
   const data = readData()
-  const cutoff = new Date(Date.now() - maxAgeMs)
+  const now = Date.now()
+  const runningCutoff = new Date(now - runningMaxAgeMs)
+  const pendingCutoff = new Date(now - pendingMaxAgeMs)
   let count = 0
   for (const run of data.runs) {
-    if (run.status === 'running' && new Date(run.createdAt) < cutoff) {
+    const createdAt = new Date(run.createdAt)
+    if (run.status === 'running' && createdAt < runningCutoff) {
+      run.status = 'error'
+      if (!run.completedAt) run.completedAt = new Date().toISOString()
+      count++
+    } else if (run.status === 'pending' && createdAt < pendingCutoff) {
       run.status = 'error'
       if (!run.completedAt) run.completedAt = new Date().toISOString()
       count++
