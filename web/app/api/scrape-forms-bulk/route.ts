@@ -751,13 +751,11 @@ async function processItem(
     const hpNorm = effectiveBase.replace(/\/$/, '').toLowerCase()
 
     // Build set of URL paths already tried as contact link candidates — skip duplicates in probe loop
+    // Normalize to remove trailing slashes so /contact and /contact/ are treated as the same path
     const triedPaths = new Set<string>()
-    if (extracted.formUrl) {
-      try { triedPaths.add(new URL(extracted.formUrl).pathname.toLowerCase()) } catch {}
-    }
-    for (const link of extracted.contactLinks) {
-      try { triedPaths.add(new URL(link.url).pathname.toLowerCase()) } catch {}
-    }
+    const normPath = (u: string) => { try { return new URL(u).pathname.toLowerCase().replace(/\/$/, '') } catch { return '' } }
+    if (extracted.formUrl) triedPaths.add(normPath(extracted.formUrl))
+    for (const link of extracted.contactLinks) triedPaths.add(normPath(link.url))
 
     let probed = 0
     for (const suffix of PROBE_PATHS) {
