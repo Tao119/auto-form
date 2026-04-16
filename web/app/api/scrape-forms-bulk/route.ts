@@ -292,15 +292,30 @@ function extractForms(html: string, baseUrl: string): {
 
     // URL path matching: require word boundaries to avoid false positives
     // e.g. /contact, /contact.html, /contact/, /contact? but NOT /contactlist, /subcontract
-    const URL_SEGMENT_RE = /(?:^|\/)(contact|inquiry|toiawase|otoiawase|mailform|ask-us|askus|feedback|renraku|goiken)(?:\/|\.|\?|_|-|$)/i
-    const URL_LOOSE_RE = /(?:%E3%81%8A%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B|%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B|%E3%81%94%E7%9B%B8%E8%AB%87|cgi-bin|cgi\/)/i
+    const URL_SEGMENT_RE = /(?:^|\/)(contact|inquiry|toiawase|otoiawase|mailform|ask-us|askus|feedback|renraku|goiken|iawase|gorenraku|gosodan)(?:\/|\.|\?|_|-|$)/i
+    // Percent-encoded Japanese contact page keywords (お問い合わせ, 問い合わせ, ご相談, ご連絡)
+    const URL_LOOSE_RE = /(?:%E3%81%8A%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B|%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B|%E3%81%94%E7%9B%B8%E8%AB%87|%E3%81%94%E9%80%A3%E7%B5%A1|cgi-bin|cgi\/)/i
     if (URL_SEGMENT_RE.test(lUrl) || URL_LOOSE_RE.test(lUrl)) score += 8
-    // Japanese URL keywords (highly specific, substring match is safe)
+    // Also decode the URL and check for raw Japanese keywords
+    try {
+      const decoded = decodeURIComponent(lUrl)
+      if (decoded.includes('お問い合わせ') || decoded.includes('問い合わせ') || decoded.includes('ご相談') || decoded.includes('ご連絡') || decoded.includes('お問合せ')) score += 8
+    } catch { /* malformed URL */ }
+    // Japanese URL keywords that might appear un-encoded
     if (lUrl.includes('お問い合わせ') || lUrl.includes('問い合わせ') || lUrl.includes('ご相談') || lUrl.includes('ご連絡')) score += 8
     // CGI form patterns common on Japanese sites (.cgi, .pl contact scripts)
     if (/\/cgi(-bin)?\/.*form/i.test(absoluteUrl)) score += 12
     if (/\/(mailform|form[_-]?mail|contact[_-]?form|inquiry|toiawase)\.(?:cgi|pl|php|aspx?)(?:\?|$)/i.test(absoluteUrl)) score += 10
     if (isExternal) score += 15
+
+    // Score boost for links that appear inside a <footer> element
+    // (contact links in footers are very common on Japanese business sites)
+    // We detect this by checking whether the link HTML appeared after a <footer> opening tag
+    const linkPos = match.index ?? -1
+    const beforeLink = html.slice(0, linkPos).toLowerCase()
+    const lastFooterOpen  = beforeLink.lastIndexOf('<footer')
+    const lastFooterClose = beforeLink.lastIndexOf('</footer')
+    if (lastFooterOpen > lastFooterClose) score += 4  // inside a footer
 
     // Require at least a URL keyword match (8) OR a strong text match (10) to accept
     if (score >= 8) links.push({ url: absoluteUrl, text: rawText.slice(0, 80), score })
@@ -466,12 +481,21 @@ function validateFormPage(html: string): boolean {
  * Ordered by likelihood. We try at most PROBE_LIMIT paths to keep latency bounded.
  */
 const PROBE_PATHS = [
-  '/contact', '/inquiry', '/otoiawase', '/toiawase', '/mailform',
-  '/form', '/contact.html', '/inquiry.html', '/contact.php', '/inquiry.php',
-  '/contact/', '/inquiry/', '/otoiawase/', '/toiawase/',
+  // English / romaji paths (most common even on Japanese sites)
+  '/contact', '/inquiry', '/contact/', '/inquiry/',
+  // Japanese romaji variants
+  '/otoiawase', '/toiawase', '/otoiawase/', '/toiawase/',
+  '/mailform', '/form', '/renraku', '/goiken',
+  // With extensions
+  '/contact.html', '/inquiry.html', '/contact.php', '/inquiry.php',
   '/contact/index.html', '/inquiry/index.html',
+  // CGI scripts common on Japanese hosting
+  '/contact/index.php', '/inquiry/index.php',
+  // URL-encoded Japanese paths (for sites that use Japanese in the path)
+  '/%E3%81%8A%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B',  // /お問い合わせ
+  '/%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B',            // /問い合わせ
 ]
-const PROBE_LIMIT = 4  // max paths to probe per site
+const PROBE_LIMIT = 5  // max paths to probe per site (increased from 4)
 
 async function processItem(
   url: string,
