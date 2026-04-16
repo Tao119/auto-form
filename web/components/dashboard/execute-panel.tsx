@@ -102,17 +102,22 @@ export default function ExecutePanel() {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
+  // Keep a ref to the latest handleExecute so the keyboard handler never captures
+  // stale state (industry / area changes don't toggle canExecute, but they DO
+  // change which parameters would be submitted).
+  const handleExecuteRef = useRef<() => Promise<void>>(() => Promise.resolve())
+
   // Keyboard shortcut: Ctrl+Enter / Cmd+Enter to execute
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && canExecute) {
         e.preventDefault()
-        handleExecute()
+        handleExecuteRef.current()
       }
     }
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [canExecute]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [canExecute])
 
   useEffect(() => {
     fetch('/api/config/presets').then((r) => r.json()).then((d) => {
@@ -303,6 +308,8 @@ export default function ExecutePanel() {
 
     Promise.all(polls).catch(() => {})
   }
+  // Sync ref on every render so the keyboard handler always calls the latest version
+  useEffect(() => { handleExecuteRef.current = handleExecute })
 
   const loadPreset = (preset: Preset) => {
     const t = preset.searchTarget
