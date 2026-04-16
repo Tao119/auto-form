@@ -85,6 +85,10 @@ export default function ExecutePanel() {
   const [showPresetNameInput, setShowPresetNameInput] = useState(false)
   const [savingPreset, setSavingPreset] = useState(false)
 
+  // Track when the first item appeared (for items/min rate calculation)
+  const firstItemTimeRef = useRef<number | null>(null)
+  const prevLiveCountRef = useRef<number>(0)
+
   const actualIndustry = industry === 'その他' ? customIndustry : industry
   const isRunning = status === 'running' || status === 'queued'
   const canExecute = !isRunning && !!actualIndustry && !!selectedProjectId &&
@@ -175,6 +179,10 @@ export default function ExecutePanel() {
 
           // Update live counter whenever itemsWritten changes
           if (run.itemsWritten !== undefined && run.itemsWritten > 0) {
+            if (prevLiveCountRef.current === 0 && run.itemsWritten > 0) {
+              firstItemTimeRef.current = Date.now()
+            }
+            prevLiveCountRef.current = run.itemsWritten
             setLiveCount(run.itemsWritten)
           }
           // Update queue position
@@ -209,6 +217,8 @@ export default function ExecutePanel() {
     setItemsWritten(0)
     setLiveCount(0)
     setBatchProgress(null)
+    firstItemTimeRef.current = null
+    prevLiveCountRef.current = 0
 
     const keywords = KEYWORDS_MAP[actualIndustry] || [actualIndustry]
     const runIds: string[] = []
@@ -733,8 +743,16 @@ export default function ExecutePanel() {
           <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded px-3 py-2">
             <Database className="w-3.5 h-3.5 text-blue-500 flex-shrink-0 animate-pulse" />
             <span className="text-blue-700 text-xs font-medium">
-              {liveCount.toLocaleString()}件 収集済み（処理継続中）
+              {liveCount.toLocaleString()}件 収集済み
             </span>
+            {firstItemTimeRef.current && (() => {
+              const elapsedMin = (Date.now() - firstItemTimeRef.current) / 60000
+              const rate = elapsedMin > 0.1 ? Math.round(liveCount / elapsedMin) : null
+              return rate !== null ? (
+                <span className="text-blue-500 text-xs">· {rate.toLocaleString()}件/分</span>
+              ) : null
+            })()}
+            <span className="text-blue-400 text-xs">（処理継続中）</span>
           </div>
         )}
 
