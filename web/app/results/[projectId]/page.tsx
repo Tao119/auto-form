@@ -126,7 +126,7 @@ export default function ProjectResultsPage() {
   //   ArrowRight→ next page
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      const inInput = document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA'
+      const inInput = document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA' || document.activeElement?.tagName === 'SELECT'
       if (e.key === '/' && !e.metaKey && !e.ctrlKey && !inInput) {
         e.preventDefault()
         searchInputRef.current?.focus()
@@ -285,7 +285,7 @@ export default function ProjectResultsPage() {
   }
   const hasFilters = filters.industry || filters.area || filters.status || filters.formType || filters.hasForm || filters.search
 
-  const handleBatchStatusUpdate = async (newStatus: string) => {
+  const handleBatchStatusUpdate = useCallback(async (newStatus: string) => {
     if (selectedIds.size === 0) return
     setBatchUpdating(true)
     try {
@@ -309,7 +309,20 @@ export default function ProjectResultsPage() {
     } finally {
       setBatchUpdating(false)
     }
-  }
+  }, [selectedIds, fetchData, page])
+
+  // S key: mark selected rows as 送信済み (handy after manually sending forms)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const inInput = document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA' || document.activeElement?.tagName === 'SELECT'
+      if (e.key === 's' && !e.metaKey && !e.ctrlKey && !e.shiftKey && !inInput && selectedIds.size > 0) {
+        e.preventDefault()
+        handleBatchStatusUpdate('送信済み')
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [selectedIds, handleBatchStatusUpdate])
 
   const toggleSelectAll = () => {
     if (selectedIds.size === rows.filter((r) => r.id).length) {
@@ -361,11 +374,15 @@ export default function ProjectResultsPage() {
           <div className="flex items-center gap-2">
             <FolderOpen className="w-4 h-4 text-gray-400" />
             <h1 className="text-lg font-semibold text-gray-900">{project.name}</h1>
-            {project.runs.some((r) => r.status === 'running') && (
+            {project.runs.some((r) => r.status === 'running') ? (
               <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded border bg-blue-50 text-blue-700 border-blue-200">
                 <RefreshCw className="w-2.5 h-2.5 animate-spin" /> 収集中
               </span>
-            )}
+            ) : project.runs.some((r) => r.status === 'pending') ? (
+              <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded border bg-amber-50 text-amber-700 border-amber-200">
+                <Clock className="w-2.5 h-2.5" /> 待機中
+              </span>
+            ) : null}
           </div>
           {project.description && (
             <p className="text-sm text-gray-500 mt-0.5 ml-6">{project.description}</p>
@@ -549,9 +566,10 @@ export default function ProjectResultsPage() {
               <button
                 onClick={() => handleBatchStatusUpdate('送信済み')}
                 disabled={batchUpdating}
+                title="S キーでも実行できます"
                 className="text-xs px-2 py-1 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white rounded transition-colors"
               >
-                送信済みにする
+                送信済みにする [S]
               </button>
               <button
                 onClick={() => handleBatchStatusUpdate('スキップ')}
