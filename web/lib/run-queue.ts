@@ -130,7 +130,7 @@ export function markJobDone(runId: string, status: 'completed' | 'failed', error
   return next
 }
 
-/** Get full queue status. Also expires stale project runs (> 2 h in 'running'). */
+/** Get full queue status. Also expires stale project runs (> 2 h in 'running') and prunes old jobs. */
 export function getQueueStatus(): {
   active: number
   waiting: number
@@ -138,6 +138,7 @@ export function getQueueStatus(): {
   recentJobs: QueueJob[]
 } {
   expireStaleRuns()
+  pruneOldJobs()
   const data = readQueue()
   const active = data.jobs.filter((j) => j.status === 'active').length
   const waiting = data.jobs.filter((j) => j.status === 'waiting').length

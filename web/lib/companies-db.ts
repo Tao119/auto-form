@@ -95,6 +95,7 @@ function getDb(): Database.Database {
   _db = new Database(DB_FILE)
   _db.pragma('journal_mode = WAL')
   _db.pragma('synchronous = NORMAL')
+  _db.pragma('wal_autocheckpoint = 400')  // checkpoint every ~1.6MB (400 * 4096 bytes)
   _db.exec(`
     CREATE TABLE IF NOT EXISTS companies (
       id                TEXT PRIMARY KEY,
