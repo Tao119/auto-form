@@ -452,7 +452,7 @@ export default function ProjectResultsPage() {
             <input
               type="text"
               ref={searchInputRef}
-              placeholder="会社名・URL・住所・電話検索... [/]"
+              placeholder="会社名・URL・住所・電話・備考... [/]"
               value={filters.search}
               onChange={(e) => setFilters({ ...filters, search: e.target.value })}
               onKeyDown={(e) => { if (e.key === 'Escape') { setFilters({ ...filters, search: '' }); searchInputRef.current?.blur() } }}
