@@ -174,9 +174,21 @@ function extractForms(html: string, baseUrl: string): {
     'reserve','yoyaku','minimo','beauty.hotpepper',
   ]
   const EXTERNAL_FORM_HOSTS = [
-    'docs.google.com','forms.gle','form.run','formstack.com','typeform.com',
-    'jotform.com','tayori.com','form.kintoneapp.com','coubic.com',
-    'airreserve.net','lin.ee','page.line.me','tally.so','paperform.co',
+    // Google Forms
+    'docs.google.com','forms.gle',
+    // Japanese form SaaS
+    'form.run','tayori.com','form.kintoneapp.com','kintone.com',
+    'formzu.net','freeml.net','formmailer.jp',
+    // International form SaaS
+    'formstack.com','typeform.com','jotform.com','tally.so','paperform.co',
+    'wufoo.com','surveymonkey.com','cognito-forms.com',
+    // Reservation / booking
+    'coubic.com','airreserve.net','reserva.be','minimo.io',
+    'tablecheck.com','ebica.jp','toreta.in',
+    // LINE
+    'lin.ee','page.line.me','accountpage.line.me','liff.line.me',
+    // Other
+    'mailchimp.com','zoho.com',
   ]
 
   // Require textarea (message field): filters out search boxes, login forms, newsletter signups
@@ -244,8 +256,11 @@ function extractForms(html: string, baseUrl: string): {
   links.sort((a, b) => b.score - a.score)
 
   const mailtoM = html.match(/mailto:([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/i)
-  const emailM = html.match(/([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-z]{2,4})/)
-  const email = mailtoM ? mailtoM[1] : emailM ? emailM[1] : null
+  // Fallback email from page text: require realistic TLD (2-6 chars) and exclude CSS-like patterns
+  // Strip tags first to avoid matching `class="foo@bar"` style attributes
+  const plainText = html.replace(/<[^>]+>/g, ' ')
+  const emailM = plainText.match(/\b([a-zA-Z0-9._%+\-]{3,}@[a-zA-Z0-9.\-]+\.[a-z]{2,6})\b/)
+  const email = mailtoM ? mailtoM[1] : (emailM && !emailM[1].endsWith('.js') && !emailM[1].endsWith('.css') ? emailM[1] : null)
 
   // tel: link is most reliable; fall back to text patterns with hyphen/en-dash/em-dash separators
   const phoneM = html.match(/tel:([\d\-+\s()]{8,15})/i)
