@@ -215,6 +215,18 @@ export default function ProjectResultsPage() {
 
   useEffect(() => { fetchData(1) }, [fetchData])
 
+  // ArrowLeft/Right keyboard pagination (separate effect so it can reference fetchData)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const inInput = document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA'
+      if (inInput || e.metaKey || e.ctrlKey) return
+      if (e.key === 'ArrowLeft' && page > 1) { e.preventDefault(); fetchData(page - 1) }
+      if (e.key === 'ArrowRight' && page * meta.limit < meta.total) { e.preventDefault(); fetchData(page + 1) }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [page, meta, fetchData])
+
   // Auto-refresh data while any run in this project is active
   useEffect(() => {
     if (!project) return
