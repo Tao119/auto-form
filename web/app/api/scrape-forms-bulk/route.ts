@@ -290,11 +290,17 @@ function extractForms(html: string, baseUrl: string): {
   const emailM = plainText.match(/\b([a-zA-Z0-9._%+\-]{3,}@[a-zA-Z0-9.\-]+\.[a-z]{2,6})\b/)
   const email = mailtoM ? mailtoM[1] : (emailM && !emailM[1].endsWith('.js') && !emailM[1].endsWith('.css') ? emailM[1] : null)
 
-  // tel: link is most reliable; fall back to text patterns with hyphen/en-dash/em-dash separators
-  const phoneM = html.match(/tel:([\d\-+\s()]{8,15})/i)
-    || html.match(/(0\d{1,4}[－\-–—]\d{1,4}[－\-–—]\d{3,4})/)
-    || html.match(/(0[0-9]{9,10})/)  // 11-digit mobile like 09012345678
-  const phone = phoneM ? phoneM[1].replace(/[\s－–—]/g, '-').trim() : null
+  // Phone extraction: tel: link is most reliable.
+  // Fallback patterns handle:
+  //   - Hyphens/dashes:  03-1234-5678  or  03－1234－5678
+  //   - Brackets:        03(1234)5678  or  03（1234）5678
+  //   - Compact:         0312345678  (10-11 digits with leading 0)
+  //   - Country code:    +81-3-1234-5678
+  const phoneM = html.match(/tel:([\d\-+\s()]{7,20})/i)
+    || html.match(/(0\d{1,4}[－\-–—(（]\d{1,4}[)）\-–—]\d{3,4})/)  // hyphen or bracket style
+    || html.match(/(0[0-9]{9,10})/)              // compact 10-11 digit number
+    || html.match(/(\+81[\-\s\d]{8,16})/)        // international +81 prefix
+  const phone = phoneM ? phoneM[1].replace(/[（(]/g, '(').replace(/[）)]/g, ')').replace(/[－–—]/g, '-').replace(/\s+/g, '').trim() : null
 
   let hasContactLink = links.length > 0
   let formUrl: string | null = links.length > 0 ? links[0].url : null
@@ -477,6 +483,12 @@ async function processItem(
     if (primary?.valid) {
       formPageText = cleanHtmlToText(primary.html)
       formPageTitle = extractTitle(primary.html)
+      // Supplement phone/email from contact page (more specific than HP)
+      if (!extracted.phone || !extracted.email) {
+        const formExtras = extractForms(primary.html, extracted.formUrl!)
+        if (!extracted.phone && formExtras.phone) extracted.phone = formExtras.phone
+        if (!extracted.email && formExtras.email) extracted.email = formExtras.email
+      }
     } else {
       // Try fallback links (lower-scored candidates)
       let validated = false
@@ -486,6 +498,11 @@ async function processItem(
           extracted.formUrl = link.url
           formPageText = cleanHtmlToText(fallback.html)
           formPageTitle = extractTitle(fallback.html)
+          if (!extracted.phone || !extracted.email) {
+            const fallbackExtras = extractForms(fallback.html, link.url)
+            if (!extracted.phone && fallbackExtras.phone) extracted.phone = fallbackExtras.phone
+            if (!extracted.email && fallbackExtras.email) extracted.email = fallbackExtras.email
+          }
           validated = true
           break
         }

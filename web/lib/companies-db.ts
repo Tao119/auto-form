@@ -178,7 +178,7 @@ export function getCompanies(filters?: CompanyFilters): Company[] {
   if (filters?.formType)  { clauses.push('formType = @formType');   params.formType = filters.formType }
   if (filters?.search) {
     const q = `%${filters.search.toLowerCase()}%`
-    clauses.push('(LOWER(name) LIKE @search OR LOWER(hpUrl) LIKE @search OR LOWER(formUrl) LIKE @search)')
+    clauses.push('(LOWER(name) LIKE @search OR LOWER(hpUrl) LIKE @search OR LOWER(formUrl) LIKE @search OR LOWER(address) LIKE @search OR phone LIKE @search)')
     params.search = q
   }
   if (filters?.hasForm === 'true')  clauses.push("formUrl != ''")
@@ -212,7 +212,7 @@ export function countCompanies(filters?: Omit<CompanyFilters, 'limit' | 'offset'
   if (filters?.formType)  { clauses.push('formType = @formType');   params.formType = filters.formType }
   if (filters?.search) {
     const q = `%${filters.search.toLowerCase()}%`
-    clauses.push('(LOWER(name) LIKE @search OR LOWER(hpUrl) LIKE @search OR LOWER(formUrl) LIKE @search)')
+    clauses.push('(LOWER(name) LIKE @search OR LOWER(hpUrl) LIKE @search OR LOWER(formUrl) LIKE @search OR LOWER(address) LIKE @search OR phone LIKE @search)')
     params.search = q
   }
   if (filters?.hasForm === 'true')  clauses.push("formUrl != ''")

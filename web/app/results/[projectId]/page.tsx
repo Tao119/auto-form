@@ -362,7 +362,7 @@ export default function ProjectResultsPage() {
             <input
               type="text"
               ref={searchInputRef}
-              placeholder="会社名・URL検索... [/]"
+              placeholder="会社名・URL・住所・電話検索... [/]"
               value={filters.search}
               onChange={(e) => setFilters({ ...filters, search: e.target.value })}
               onKeyDown={(e) => { if (e.key === 'Escape') { setFilters({ ...filters, search: '' }); searchInputRef.current?.blur() } }}
@@ -603,7 +603,15 @@ export default function ProjectResultsPage() {
                       <FormTypeBadge type={row['フォーム種別']} />
                     </td>
                     <td className="px-3 py-2.5">
-                      <StatusBadge status={row['ステータス']} />
+                      {row.id ? (
+                        <InlineStatusSelect
+                          id={row.id}
+                          status={row['ステータス']}
+                          onChanged={() => fetchData(page)}
+                        />
+                      ) : (
+                        <StatusBadge status={row['ステータス']} />
+                      )}
                     </td>
                     <td className="px-3 py-2.5 text-gray-400 text-xs whitespace-nowrap">{row['収集日時'] || '-'}</td>
                     {!selectedRunId && (
@@ -727,6 +735,47 @@ function FormTypeBadge({ type }: { type: string }) {
     )
   }
   return <span className="text-gray-400 text-xs">{type || '-'}</span>
+}
+
+function InlineStatusSelect({ id, status, onChanged }: { id: string; status: string; onChanged: () => void }) {
+  const [updating, setUpdating] = useState(false)
+
+  const handleChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const newStatus = e.target.value
+    if (newStatus === status) return
+    setUpdating(true)
+    try {
+      const res = await fetch('/api/companies', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, status: newStatus }),
+      })
+      if (res.ok) onChanged()
+    } catch { /* ignore */ } finally {
+      setUpdating(false)
+    }
+  }
+
+  const colorMap: Record<string, string> = {
+    '未送信': 'bg-gray-100 text-gray-600 border-gray-300',
+    '送信済み': 'bg-green-50 text-green-700 border-green-300',
+    'エラー': 'bg-red-50 text-red-700 border-red-300',
+    'スキップ': 'bg-yellow-50 text-yellow-700 border-yellow-300',
+  }
+  const cls = colorMap[status] || 'bg-gray-100 text-gray-600 border-gray-300'
+
+  return (
+    <select
+      value={status}
+      onChange={handleChange}
+      disabled={updating}
+      className={`text-xs px-2 py-0.5 rounded border cursor-pointer appearance-none ${cls} disabled:opacity-60 focus:outline-none focus:ring-1 focus:ring-blue-400`}
+    >
+      {['未送信', '送信済み', 'エラー', 'スキップ'].map((s) => (
+        <option key={s} value={s}>{s}</option>
+      ))}
+    </select>
+  )
 }
 
 function StatusBadge({ status }: { status: string }) {
