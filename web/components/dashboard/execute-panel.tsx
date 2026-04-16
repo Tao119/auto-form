@@ -312,7 +312,10 @@ export default function ExecutePanel() {
       setIndustry('その他')
       setCustomIndustry(t.industry)
     }
-    setSelectedAreas([t.area])
+    // area may be comma-separated (multi-area preset)
+    const areas = t.area.includes(',') ? t.area.split(',').map((a) => a.trim()).filter(Boolean) : [t.area]
+    setSelectedAreas(areas)
+    if (t.maxResults) setMaxResults(t.maxResults)
     setShowPresets(false)
   }
 
@@ -326,7 +329,7 @@ export default function ExecutePanel() {
       await fetch('/api/config/presets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, searchTarget: { industry: actualIndustry, area, keywords } }),
+        body: JSON.stringify({ name, searchTarget: { industry: actualIndustry, area, keywords, maxResults } }),
       })
       const r = await fetch('/api/config/presets')
       const d = await r.json()
