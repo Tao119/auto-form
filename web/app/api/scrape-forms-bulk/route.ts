@@ -552,7 +552,7 @@ function validateFormPage(html: string): boolean {
     if (!/<form[\s>]/i.test(html)) return false
   }
   // Reject pages whose title strongly suggests non-contact content and have no form
-  if (/ニュース|news|プレスリリース|お知らせ一覧|アクセス|access|採用|recruit|サービス一覧|実績|ブログ|blog|プライバシー|privacy|利用規約|terms|サイトマップ|sitemap/.test(title)) {
+  if (/ニュース|news|プレスリリース|お知らせ一覧|アクセス|access|採用|recruit|サービス一覧|実績|ブログ|blog|プライバシー|privacy|利用規約|terms|サイトマップ|sitemap|会社概要|ギャラリー|gallery/.test(title)) {
     if (!/<form[\s>]/i.test(html)) return false
   }
 
@@ -595,12 +595,15 @@ const PROBE_PATHS = [
   '/cgi-bin/mail.cgi', '/cgi-bin/post.cgi',
   // WordPress / common CMS slugs
   '/contact-us', '/contact-us/', '/contact_us', '/contactus', '/get-in-touch', '/send-message',
+  '/contact-form', '/contact-form/',
+  // Shopify / Square Online: pages are nested under /pages/
+  '/pages/contact', '/pages/inquiry', '/pages/contact-us',
   // URL-encoded Japanese paths
   '/%E3%81%8A%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B',  // /お問い合わせ
   '/%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B',            // /問い合わせ
   '/%E3%81%8A%E5%95%8F%E5%90%88%E3%81%9B',                     // /お問合せ
 ]
-const PROBE_LIMIT = 10  // max paths to probe per site
+const PROBE_LIMIT = 12  // max paths to probe per site
 
 async function processItem(
   url: string,
