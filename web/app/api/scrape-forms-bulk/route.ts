@@ -631,12 +631,16 @@ async function processItem(
     if (primary?.valid) {
       formPageText = cleanHtmlToText(primary.html)
       formPageTitle = extractTitle(primary.html)
-      // Supplement phone/email from contact page (more specific than HP)
-      if (!extracted.phone || !extracted.email) {
-        const formExtras = extractForms(primary.html, extracted.formUrl!)
-        if (!extracted.phone && formExtras.phone) extracted.phone = formExtras.phone
-        if (!extracted.email && formExtras.email) extracted.email = formExtras.email
+      // If the form URL redirected to a different URL, store the canonical destination
+      if (primary.finalUrl && primary.finalUrl !== extracted.formUrl) {
+        extracted.formUrl = primary.finalUrl
       }
+      // Re-extract metadata from the contact page: more accurate than the HP
+      const formExtras = extractForms(primary.html, extracted.formUrl!)
+      if (!extracted.phone && formExtras.phone) extracted.phone = formExtras.phone
+      if (!extracted.email && formExtras.email) extracted.email = formExtras.email
+      // Use contact page's formTypeHint (overrides the HP-level hint for better accuracy)
+      if (formExtras.formTypeHint) extracted.formTypeHint = formExtras.formTypeHint
     } else {
       // Try fallback links (lower-scored candidates)
       let validated = false
@@ -646,11 +650,10 @@ async function processItem(
           extracted.formUrl = link.url
           formPageText = cleanHtmlToText(fallback.html)
           formPageTitle = extractTitle(fallback.html)
-          if (!extracted.phone || !extracted.email) {
-            const fallbackExtras = extractForms(fallback.html, link.url)
-            if (!extracted.phone && fallbackExtras.phone) extracted.phone = fallbackExtras.phone
-            if (!extracted.email && fallbackExtras.email) extracted.email = fallbackExtras.email
-          }
+          const fallbackExtras = extractForms(fallback.html, link.url)
+          if (!extracted.phone && fallbackExtras.phone) extracted.phone = fallbackExtras.phone
+          if (!extracted.email && fallbackExtras.email) extracted.email = fallbackExtras.email
+          if (fallbackExtras.formTypeHint) extracted.formTypeHint = fallbackExtras.formTypeHint
           validated = true
           break
         }

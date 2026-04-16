@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import * as https from 'https'
 import * as http from 'http'
+import * as zlib from 'zlib'
 import { URL } from 'url'
 import { z } from 'zod'
 
@@ -45,7 +46,7 @@ function fetchUrl(rawUrl: string, timeoutMs: number): Promise<FetchResult> {
         'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
         'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8',
         'Accept-Language': 'ja,en;q=0.5',
-        'Accept-Encoding': 'identity',
+        'Accept-Encoding': 'gzip, deflate',
       },
       rejectUnauthorized: false,
     }
@@ -64,7 +65,7 @@ function fetchUrl(rawUrl: string, timeoutMs: number): Promise<FetchResult> {
 
         const chunks: Buffer[] = []
         let totalBytes = 0
-        const MAX_BYTES = 500_000 // 500KB limit per page
+        const MAX_BYTES = 500_000 // 500KB compressed limit per page
 
         res.on('data', (chunk: Buffer) => {
           totalBytes += chunk.length
@@ -76,8 +77,16 @@ function fetchUrl(rawUrl: string, timeoutMs: number): Promise<FetchResult> {
         })
         res.on('end', () => {
           clearTimeout(tid)
-          const html = Buffer.concat(chunks).toString('utf8')
-          done({ url: rawUrl, html, error: null, statusCode: res.statusCode ?? null })
+          const rawBuf = Buffer.concat(chunks)
+          const encoding = (res.headers['content-encoding'] || '').toLowerCase()
+          const finish = (html: string) => done({ url: rawUrl, html, error: null, statusCode: res.statusCode ?? null })
+          if (encoding === 'gzip') {
+            zlib.gunzip(rawBuf, (err, decoded) => finish(err ? rawBuf.toString('utf8') : decoded.toString('utf8')))
+          } else if (encoding === 'deflate') {
+            zlib.inflate(rawBuf, (err, decoded) => finish(err ? rawBuf.toString('utf8') : decoded.toString('utf8')))
+          } else {
+            finish(rawBuf.toString('utf8'))
+          }
         })
         res.on('error', (e) => {
           clearTimeout(tid)
