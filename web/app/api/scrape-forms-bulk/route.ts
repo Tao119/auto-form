@@ -4,6 +4,12 @@ import * as http from 'http'
 import { URL } from 'url'
 import { z } from 'zod'
 
+// ── Global concurrency guard ───────────────────────────────────────
+// Allow at most MAX_CONCURRENT_BATCHES simultaneous scraping jobs to
+// prevent runaway memory / CPU usage when n8n fires multiple webhooks.
+const MAX_CONCURRENT_BATCHES = 2
+let _activeBatches = 0
+
 const Schema = z.object({
   items: z.array(z.object({
     url: z.string(),       // HP URL to fetch
@@ -190,6 +196,21 @@ function extractForms(html: string, baseUrl: string): {
     'お問い合わせ','問い合わせ','ご相談','ご連絡','cgi-bin','cgi/',
     // Note: 'form','mail','send','message','support' intentionally removed — too generic
   ]
+  // Domains that are NEVER valid inquiry form URLs — immediately skip links pointing here
+  const ALWAYS_REJECT_HOSTS = [
+    // Social media
+    'facebook.com','fb.com','instagram.com','twitter.com','x.com',
+    'linkedin.com','tiktok.com','youtube.com','pinterest.com',
+    // Maps
+    'maps.google.com','google.co.jp','google.com','maps.apple.com',
+    // E-commerce platforms
+    'amazon.co.jp','amazon.com','rakuten.co.jp','yahoo.co.jp',
+    // Cloud storage / docs (non-form)
+    'drive.google.com','dropbox.com','onedrive.com',
+    // Apple
+    'apple.com',
+  ]
+
   const BOOKING_KW = [
     '予約','ご予約','reservation','booking','ネット予約','hotpepper',
     'reserve','yoyaku','minimo','beauty.hotpepper',
@@ -254,6 +275,8 @@ function extractForms(html: string, baseUrl: string): {
       const baseHost = new URL(baseUrl).hostname.replace(/^www\./, '')
       linkHost = new URL(absoluteUrl).hostname.replace(/^www\./, '')
       isExternal = baseHost !== linkHost
+      // Immediately reject known non-form domains (SNS, maps, e-commerce, etc.)
+      if (ALWAYS_REJECT_HOSTS.some((h) => linkHost === h || linkHost.endsWith('.' + h))) continue
       if (isExternal && !EXTERNAL_FORM_HOSTS.some((h) => linkHost.includes(h))) continue
     } catch { continue }
 
@@ -620,6 +643,13 @@ async function processBatch(
 }
 
 export async function POST(req: NextRequest) {
+  if (_activeBatches >= MAX_CONCURRENT_BATCHES) {
+    return NextResponse.json(
+      { success: false, error: 'Server busy — too many concurrent scraping jobs. Retry in a few seconds.' },
+      { status: 429 }
+    )
+  }
+  _activeBatches++
   try {
     const body = Schema.parse(await req.json())
     const { items, timeoutMs, concurrency, fetchFormPage } = body
@@ -646,5 +676,7 @@ export async function POST(req: NextRequest) {
     })
   } catch (e) {
     return NextResponse.json({ success: false, error: String(e) }, { status: 400 })
+  } finally {
+    _activeBatches--
   }
 }

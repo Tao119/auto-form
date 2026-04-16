@@ -41,9 +41,23 @@ interface ProjectDetail extends Project {
   formFoundCount?: number
 }
 
+// ── localStorage helpers for filter persistence ────────────────────
+function loadSavedFilters(projectId: string): Partial<FilterState & { runId: string; sortBy: string; sortDir: 'ASC' | 'DESC' }> {
+  try {
+    const raw = localStorage.getItem(`results_filters_${projectId}`)
+    return raw ? JSON.parse(raw) : {}
+  } catch { return {} }
+}
+function saveFilters(projectId: string, data: FilterState & { runId: string; sortBy: string; sortDir: 'ASC' | 'DESC' }) {
+  try { localStorage.setItem(`results_filters_${projectId}`, JSON.stringify(data)) } catch {}
+}
+
 export default function ProjectResultsPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const router = useRouter()
+
+  // Restore persisted state once projectId is known
+  const [_filterRestored, setFilterRestored] = useState(false)
 
   const [project, setProject] = useState<ProjectDetail | null>(null)
   const [selectedRunId, setSelectedRunId] = useState<string>('')
@@ -62,6 +76,33 @@ export default function ProjectResultsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [batchUpdating, setBatchUpdating] = useState(false)
   const searchInputRef = useRef<HTMLInputElement>(null)
+
+  // Restore persisted filters from localStorage on first mount
+  useEffect(() => {
+    if (!projectId) return
+    const saved = loadSavedFilters(projectId)
+    if (saved.industry !== undefined || saved.area !== undefined || saved.status !== undefined || saved.formType !== undefined || saved.hasForm !== undefined) {
+      setFilters({
+        industry: saved.industry ?? '',
+        area: saved.area ?? '',
+        status: saved.status ?? '',
+        formType: saved.formType ?? '',
+        hasForm: saved.hasForm ?? '',
+        search: '',  // never restore search — too stale
+      })
+    }
+    if (saved.runId !== undefined) setSelectedRunId(saved.runId)
+    if (saved.sortBy) setSortBy(saved.sortBy)
+    if (saved.sortDir) setSortDir(saved.sortDir)
+    setFilterRestored(true)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId])
+
+  // Persist filter changes to localStorage
+  useEffect(() => {
+    if (!projectId || !_filterRestored) return
+    saveFilters(projectId, { ...filters, runId: selectedRunId, sortBy, sortDir })
+  }, [projectId, _filterRestored, filters, selectedRunId, sortBy, sortDir])
 
   // Press '/' to focus search input
   useEffect(() => {
@@ -195,7 +236,12 @@ export default function ProjectResultsPage() {
     }
   }
 
-  const clearFilters = () => setFilters({ industry: '', area: '', status: '', formType: '', hasForm: '', search: '' })
+  const clearFilters = () => {
+    setFilters({ industry: '', area: '', status: '', formType: '', hasForm: '', search: '' })
+    if (projectId) {
+      try { localStorage.removeItem(`results_filters_${projectId}`) } catch {}
+    }
+  }
   const hasFilters = filters.industry || filters.area || filters.status || filters.formType || filters.hasForm || filters.search
 
   const handleBatchStatusUpdate = async (newStatus: string) => {
