@@ -170,6 +170,21 @@ function getDb(): Database.Database {
         OR formUrl LIKE '%://liff.line.me/%'
       )
   `)
+  // Migration: reclassify booking SaaS URLs that were mis-classified as 'inquiry'
+  _db.exec(`
+    UPDATE companies
+    SET formType = 'reservation'
+    WHERE formType = 'inquiry'
+      AND (
+        formUrl LIKE '%://b.hpr.jp/%'
+        OR formUrl LIKE '%://riyou.jp/%'
+        OR formUrl LIKE '%://stekina.com/%'
+        OR formUrl LIKE '%://haisha-yoyaku.jp/%'
+        OR formUrl LIKE '%://eparkdentist.com/%'
+        OR formUrl LIKE '%dentamap.jp/%'
+        OR formUrl LIKE '%://ekiten.jp/%'
+      )
+  `)
   return _db
 }
 

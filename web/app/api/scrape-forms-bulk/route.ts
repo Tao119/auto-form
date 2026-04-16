@@ -110,6 +110,10 @@ const BOOKING_URL_HOSTS = [
   'stekina.com',        // 美容師向け予約LP
   'ekiten.jp',          // 店舗予約ポータル
   'navitime.co.jp',     // 予約ナビ
+  // Dental booking platforms
+  'haisha-yoyaku.jp',   // 歯科予約専用サイト
+  'eparkdentist.com',   // EPARK歯科
+  'dentamap.jp',        // 歯科MAP予約
 ]
 const EXTERNAL_FORM_HOSTS = [
   'docs.google.com','forms.gle',
@@ -148,7 +152,7 @@ const EXTERNAL_FORM_HOSTS = [
 ]
 // URL path suffixes that clearly indicate non-contact pages.
 // Trailing boundary (\/|\.|\?|$) prevents partial matches: /recruit-info is NOT rejected.
-const NON_CONTACT_SUFFIX_RE = /\/(privacy[-_]?(?:policy)?|terms?(?:[-_]of[-_]service)?|sitemap|blog|news|articles?|posts?|column|archive|categories?|shop|cart|login|sign[-_]?up|register|logout|faq|access(?:map)?|recruit(?:ment)?|career|jobs?|about(?:-us)?|company|profile|gallery|works|portfolio|media|press|staff|team|members?|events?|downloads?|videos?|photos?|voice(?:s)?|search|checkout|product(?:s)?|service(?:s)?|feature(?:s)?|pricing|plan(?:s)?|case[-_]?stud(?:y|ies)|testimonial(?:s)?|partner(?:s)?|investor(?:s)?|ir\b|sustainability|csr|history|overview|mission|vision|values?|review(?:s)?|interview(?:s)?|seminar(?:s)?|workshop(?:s)?|award(?:s)?|flow|guide(?:s)?|howto|how[-_]to|notification(?:s)?|release(?:s)?|legal|policy|cookie(?:[-_]policy)?|disclaimer|terms[-_]?conditions?|tag(?:s)?|topic(?:s)?|author(?:s)?|category|page\/\d|feed(?:\/|$)|rss(?:\/|$)|wp-admin|wp-login|wp-json|404|500|sitemap\.xml)(?:\/|\.|\?|$)/i
+const NON_CONTACT_SUFFIX_RE = /\/(privacy[-_]?(?:policy)?|terms?(?:[-_]of[-_]service)?|sitemap|blog|news|articles?|posts?|column|archive|categories?|shop|cart|login|sign[-_]?up|register|logout|faq|access(?:map)?|recruit(?:ment)?(?:[-_]\w+)?|career|jobs?|about(?:-us)?|company|profile|gallery|works|portfolio|media|press|staff|team|members?|events?|downloads?|videos?|photos?|voice(?:s)?|search(?:\/|$)|checkout|product(?:s)?|service(?:s)?|feature(?:s)?|pricing|plan(?:s)?|case[-_]?stud(?:y|ies)|testimonial(?:s)?|partner(?:s)?|investor(?:s)?|ir\b|sustainability|csr|history|overview|mission|vision|values?|review(?:s)?|interview(?:s)?|seminar(?:s)?|workshop(?:s)?|award(?:s)?|flow|guide(?:s)?|howto|how[-_]to|notification(?:s)?|release(?:s)?|legal|policy|cookie(?:[-_]policy)?|disclaimer|terms[-_]?conditions?|tag(?:s)?|topic(?:s)?|author(?:s)?|category|page\/\d|feed(?:\/|$)|rss(?:\/|$)|wp-admin|wp-login|wp-json|404|500|sitemap\.xml)(?:\/|\.|\?|$)/i
 // URL segment patterns that strongly suggest a dedicated contact page
 const URL_SEGMENT_RE = /(?:^|\/)(contact|inquiry|enquiry|enquire|inquire|toiawase|otoiawase|mailform|formmail|form[-_]mail|ask-us|askus|feedback|renraku|goiken|iawase|gorenraku|gosodan|soudan|meiru|consultation|message|contactus|contactform|inquiryform|mailsend|sendmail|getintouch|get-in-touch|write-to-us|writeto|mailsend|formcontact|contactmail|otoiawase[-_]form|toiawase[-_]form|form[-_]otoiawase|form[-_]toiawase|free[-_]consultation|online[-_]inquiry|web[-_]inquiry|online[-_]contact|web[-_]contact)(?:\/|\.|\?|_|-|$)/i
 const URL_LOOSE_RE = /(?:%E3%81%8A%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B|%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B|%E3%81%94%E7%9B%B8%E8%AB%87|%E3%81%94%E9%80%A3%E7%B5%A1|cgi-bin|cgi\/)/i
@@ -175,6 +179,9 @@ const REDIRECT_REJECT_HOSTS = [
   'tidycal.com','oncehub.com','appointlet.com','setmore.com',
   // Additional scheduling services matching BOOKING_URL_HOSTS above
   'squareup.com','classpass.com','vagaro.com',
+  // Beauty/dental booking (keep in sync with BOOKING_URL_HOSTS)
+  'b.hpr.jp','riyou.jp','stekina.com','ekiten.jp',
+  'haisha-yoyaku.jp','eparkdentist.com','dentamap.jp',
 ]
 // Fast-pass for known external form SaaS — page is a valid contact form without further analysis
 const EXTERNAL_FORM_FAST_PASS_RE = /docs\.google\.com\/forms|forms\.gle|form\.run|formrun\.com|typeform\.com|jotform\.com|tayori\.com|formstack\.com|formzu\.net|form\.kintoneapp|kintone\.com|freeml\.net|mailform\.jp|mfcontact\.com|mfcontacts\.com|formmailer\.jp|tally\.so|paperform\.co|cognito-forms\.com|wufoo\.com|surveymonkey\.com|share\.hsforms\.com|forms\.hubspot\.com|share\.formsite\.com|app\.getresponse\.com|mailchimp\.com|zoho\.com|forms\.office\.com|forms\.microsoft\.com|123formbuilder\.com|formassembly\.com|forms\.app|tripetto\.app|gmomakeform\.com|formhub\.jp|questant\.jp|sendinblue\.com|brevo\.com|f-formz\.com|ws\.formzu\.net|spiral\.ne\.jp|spiral-forms\.net|webcas\.net|n-form\.jp|secure\.n-form\.jp|webto\.salesforce\.com|elfsight\.com|plus\.form-mailer\.jp/i
