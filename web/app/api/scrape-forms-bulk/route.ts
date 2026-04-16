@@ -37,7 +37,7 @@ export interface FormExtractResult {
   error: string | null
 }
 
-function fetchUrl(rawUrl: string, timeoutMs: number): Promise<FetchResult> {
+function fetchUrl(rawUrl: string, timeoutMs: number, _depth = 0): Promise<FetchResult> {
   return new Promise((resolve) => {
     let resolved = false
     const done = (result: FetchResult) => {
@@ -46,6 +46,9 @@ function fetchUrl(rawUrl: string, timeoutMs: number): Promise<FetchResult> {
 
     if (!rawUrl || !rawUrl.startsWith('http')) {
       return done({ url: rawUrl, html: '', error: 'invalid_url', statusCode: null })
+    }
+    if (_depth > 5) {
+      return done({ url: rawUrl, html: '', error: 'too_many_redirects', statusCode: null })
     }
 
     let parsedUrl: URL
@@ -76,7 +79,7 @@ function fetchUrl(rawUrl: string, timeoutMs: number): Promise<FetchResult> {
           clearTimeout(tid)
           try {
             const redirectUrl = new URL(res.headers.location, rawUrl).toString()
-            fetchUrl(redirectUrl, timeoutMs).then((r) => done({ ...r, url: rawUrl }))
+            fetchUrl(redirectUrl, timeoutMs, _depth + 1).then((r) => done({ ...r, url: rawUrl }))
           } catch {
             done({ url: rawUrl, html: '', error: 'bad_redirect', statusCode: res.statusCode })
           }
