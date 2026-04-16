@@ -417,20 +417,30 @@ async function processItem(
   return { url, baseUrl, ...extracted, formPageText, formPageTitle, error: null }
 }
 
+/**
+ * Sliding-window concurrent processor.
+ * Keeps at most `concurrency` items in-flight at all times.
+ * Unlike fixed-batch mode, fast completions immediately free slots for new items.
+ */
 async function processBatch(
   items: Array<{ url: string; baseUrl: string }>,
   timeoutMs: number,
   concurrency: number,
   fetchFormPage: boolean
 ): Promise<FormExtractResult[]> {
-  const results: FormExtractResult[] = []
-  for (let i = 0; i < items.length; i += concurrency) {
-    const batch = items.slice(i, i + concurrency)
-    const batchResults = await Promise.all(
-      batch.map(({ url, baseUrl }) => processItem(url, baseUrl, timeoutMs, fetchFormPage))
-    )
-    results.push(...batchResults)
+  const results: FormExtractResult[] = new Array(items.length)
+  let nextIndex = 0
+
+  const worker = async () => {
+    while (true) {
+      const i = nextIndex++
+      if (i >= items.length) break
+      results[i] = await processItem(items[i].url, items[i].baseUrl, timeoutMs, fetchFormPage)
+    }
   }
+
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, worker)
+  await Promise.all(workers)
   return results
 }
 

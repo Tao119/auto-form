@@ -36,6 +36,8 @@ interface Meta {
 
 interface ProjectDetail extends Project {
   runs: ProjectRun[]
+  totalCount?: number
+  formFoundCount?: number
 }
 
 export default function ProjectResultsPage() {
@@ -212,9 +214,24 @@ export default function ProjectResultsPage() {
           {project.description && (
             <p className="text-sm text-gray-500 mt-0.5 ml-6">{project.description}</p>
           )}
-          <p className="text-xs text-gray-400 mt-1 ml-6">
-            {project.runs.length}回の実行 · {project.id}
-          </p>
+          <div className="flex items-center gap-3 mt-1 ml-6">
+            <span className="text-xs text-gray-400">{project.runs.length}回の実行 · {project.id}</span>
+            {project.totalCount !== undefined && project.totalCount > 0 && (
+              <>
+                <span className="text-gray-200">|</span>
+                <span className="text-xs text-gray-500">
+                  <span className="font-medium text-gray-700">{project.totalCount.toLocaleString()}</span>件収集
+                </span>
+                {project.formFoundCount !== undefined && (
+                  <span className="text-xs text-gray-500">
+                    フォームあり&nbsp;
+                    <span className="font-medium text-green-600">{project.formFoundCount.toLocaleString()}</span>件
+                    &nbsp;({Math.round((project.formFoundCount / project.totalCount) * 100)}%)
+                  </span>
+                )}
+              </>
+            )}
+          </div>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           <button
