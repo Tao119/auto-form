@@ -89,6 +89,7 @@ export default function ProjectResultsPage() {
   const [exporting, setExporting] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [batchUpdating, setBatchUpdating] = useState(false)
+  const [batchSuccessMsg, setBatchSuccessMsg] = useState('')
   const searchInputRef = useRef<HTMLInputElement>(null)
 
   // Restore persisted filters from localStorage on first mount
@@ -295,8 +296,11 @@ export default function ProjectResultsPage() {
       })
       const data = await res.json()
       if (data.success) {
+        const n = selectedIds.size
         setSelectedIds(new Set())
         fetchData(page)
+        setBatchSuccessMsg(`${n}件を「${newStatus}」に変更しました`)
+        setTimeout(() => setBatchSuccessMsg(''), 2500)
       } else {
         setError(data.error || '更新失敗')
       }
@@ -551,6 +555,7 @@ export default function ProjectResultsPage() {
               >
                 未送信に戻す
               </button>
+              <CopyFormUrlsButton ids={selectedIds} rows={rows} />
               <button
                 onClick={() => setSelectedIds(new Set())}
                 className="text-xs text-gray-400 hover:text-gray-600"
@@ -570,6 +575,11 @@ export default function ProjectResultsPage() {
       {error && (
         <div className="bg-red-50 border border-red-200 rounded p-3 text-sm text-red-700">
           {error}
+        </div>
+      )}
+      {batchSuccessMsg && (
+        <div className="bg-green-50 border border-green-200 rounded p-2 text-xs text-green-700">
+          {batchSuccessMsg}
         </div>
       )}
 
@@ -624,8 +634,14 @@ export default function ProjectResultsPage() {
                 return (
                   <tr
                     key={i}
-                    className={`border-b border-gray-100 hover:bg-gray-50 transition-colors ${
-                      isSelected ? 'bg-blue-50/60' : noForm ? 'opacity-60' : i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
+                    onClick={(e) => {
+                      if (!row.id) return
+                      const t = e.target as HTMLElement
+                      if (t.closest('a, button, input, select, textarea, label')) return
+                      toggleSelect(row.id!)
+                    }}
+                    className={`border-b border-gray-100 transition-colors cursor-pointer ${
+                      isSelected ? 'bg-blue-50/60 hover:bg-blue-100/60' : noForm ? 'opacity-60 hover:opacity-80 hover:bg-gray-50' : i % 2 === 0 ? 'bg-white hover:bg-gray-50' : 'bg-gray-50/50 hover:bg-gray-100/50'
                     }`}
                   >
                     <td className="px-3 py-2.5">
@@ -769,6 +785,11 @@ function InlineNotesInput({ id, notes }: { id: string; notes: string }) {
   const [saving, setSaving] = useState(false)
   const [dirty, setDirty] = useState(false)
 
+  // Sync when parent refreshes data (but not while user is editing)
+  useEffect(() => {
+    if (!dirty) setValue(notes)
+  }, [notes, dirty])
+
   const handleBlur = async () => {
     if (!dirty) return
     setSaving(true)
@@ -827,6 +848,30 @@ function SortableHeader({
         }
       </div>
     </th>
+  )
+}
+
+function CopyFormUrlsButton({ ids, rows }: { ids: Set<string>; rows: CompanyRow[] }) {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = () => {
+    const urls = rows
+      .filter((r) => r.id && ids.has(r.id) && r['フォームURL'])
+      .map((r) => r['フォームURL'])
+    if (urls.length === 0) return
+    navigator.clipboard.writeText(urls.join('\n')).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }).catch(() => {})
+  }
+  return (
+    <button
+      onClick={handleCopy}
+      className="flex items-center gap-1 text-xs px-2 py-1 border border-gray-300 text-gray-600 hover:bg-gray-50 rounded transition-colors"
+      title="選択行のフォームURLをクリップボードにコピー"
+    >
+      {copied ? <Check className="w-3 h-3 text-green-600" /> : <Copy className="w-3 h-3" />}
+      URL一括コピー
+    </button>
   )
 }
 

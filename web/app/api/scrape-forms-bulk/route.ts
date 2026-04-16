@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import * as https from 'https'
 import * as http from 'http'
+import * as zlib from 'zlib'
 import { URL } from 'url'
 import { z } from 'zod'
 
@@ -73,7 +74,7 @@ function fetchUrl(rawUrl: string, timeoutMs: number, _depth = 0): Promise<FetchR
         'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
         'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8',
         'Accept-Language': 'ja,en;q=0.5',
-        'Accept-Encoding': 'identity',
+        'Accept-Encoding': 'gzip, deflate',
       },
       rejectUnauthorized: false,
     }
@@ -96,7 +97,8 @@ function fetchUrl(rawUrl: string, timeoutMs: number, _depth = 0): Promise<FetchR
 
         const chunks: Buffer[] = []
         let totalBytes = 0
-        const MAX_BYTES = 200_000 // 200KB sufficient for link scanning
+        // 200KB compressed — after decompression typically 600KB–1MB, sufficient for link scanning
+        const MAX_BYTES = 200_000
 
         res.on('data', (chunk: Buffer) => {
           totalBytes += chunk.length
@@ -104,21 +106,31 @@ function fetchUrl(rawUrl: string, timeoutMs: number, _depth = 0): Promise<FetchR
         })
         res.on('end', () => {
           clearTimeout(tid)
-          const html = Buffer.concat(chunks).toString('utf8')
-          // Handle <meta http-equiv="refresh" content="0;url=..."> redirects (common on Japanese CMS)
-          if (_depth <= 5) {
-            const metaRefreshM = html.match(/<meta[^>]+http-equiv=["']?refresh["']?[^>]*content=["']?\d*;\s*url=["']?([^"'\s>]+)/i)
-            if (metaRefreshM) {
-              try {
-                const metaUrl = new URL(metaRefreshM[1], rawUrl).toString()
-                if (metaUrl !== rawUrl) {
-                  fetchUrl(metaUrl, timeoutMs, _depth + 1).then((r) => done({ ...r, url: rawUrl }))
-                  return
-                }
-              } catch { /* ignore malformed meta refresh */ }
+          const rawBuf = Buffer.concat(chunks)
+          const encoding = (res.headers['content-encoding'] || '').toLowerCase()
+          const processHtml = (html: string) => {
+            // Handle <meta http-equiv="refresh" content="0;url=..."> redirects (common on Japanese CMS)
+            if (_depth <= 5) {
+              const metaRefreshM = html.match(/<meta[^>]+http-equiv=["']?refresh["']?[^>]*content=["']?\d*;\s*url=["']?([^"'\s>]+)/i)
+              if (metaRefreshM) {
+                try {
+                  const metaUrl = new URL(metaRefreshM[1], rawUrl).toString()
+                  if (metaUrl !== rawUrl) {
+                    fetchUrl(metaUrl, timeoutMs, _depth + 1).then((r) => done({ ...r, url: rawUrl }))
+                    return
+                  }
+                } catch { /* ignore malformed meta refresh */ }
+              }
             }
+            done({ url: rawUrl, finalUrl: rawUrl, html, error: null, statusCode: res.statusCode ?? null })
           }
-          done({ url: rawUrl, finalUrl: rawUrl, html, error: null, statusCode: res.statusCode ?? null })
+          if (encoding === 'gzip') {
+            zlib.gunzip(rawBuf, (err, decoded) => processHtml(err ? rawBuf.toString('utf8') : decoded.toString('utf8')))
+          } else if (encoding === 'deflate') {
+            zlib.inflate(rawBuf, (err, decoded) => processHtml(err ? rawBuf.toString('utf8') : decoded.toString('utf8')))
+          } else {
+            processHtml(rawBuf.toString('utf8'))
+          }
         })
         res.on('error', (e) => { clearTimeout(tid); done({ url: rawUrl, finalUrl: rawUrl, html: '', error: e.message, statusCode: null }) })
       })
@@ -221,6 +233,13 @@ function extractForms(html: string, baseUrl: string): {
     'tablecheck.com','ebica.jp','toreta.in','hotpepper.jp',
     'beauty.hotpepper.jp','select-type.com','icalendar.jp',
     'reservestock.jp','reservia.jp',
+    // Additional booking / reservation services
+    'epark.jp','eparkeclinic.jp',      // medical / dental appointments
+    'reservawith.google.com','business.google.com',  // Google Reserve
+    'caresul.jp','freqy.jp',           // beauty/nail booking
+    'benri-yoyaku.jp','chouseisan.com',
+    'jalan.net','ikyu.com','hotels.com','booking.com','agoda.com',  // hotel booking
+    'airbnb.com','airbnb.jp',
   ]
   const EXTERNAL_FORM_HOSTS = [
     // Google Forms
@@ -286,6 +305,12 @@ function extractForms(html: string, baseUrl: string): {
     const isBooking = BOOKING_KW.some((kw) => lText.includes(kw.toLowerCase()) || lUrl.includes(kw.toLowerCase()))
       || BOOKING_URL_HOSTS.some((h) => linkHost.includes(h))
     if (isBooking) continue
+
+    // Reject links whose URL path clearly indicates non-contact content.
+    // Pattern: the last meaningful path segment is a well-known non-contact word.
+    // We match word-boundary-style so /recruit-info/ is rejected but /contact-form/ is not.
+    const NON_CONTACT_SUFFIX_RE = /\/(privacy[-_]?(?:policy)?|terms?(?:[-_]of[-_]service)?|sitemap|blog|news|articles?|posts?|shop|cart|login|sign[-_]?up|register|logout|faq|access(?:map)?|recruit|career|jobs?)(?:\/|\.|\?|$)/i
+    if (NON_CONTACT_SUFFIX_RE.test(lUrl)) continue
 
     let score = 0
     for (const kw of CONTACT_TEXT_KW) { if (lText.includes(kw.toLowerCase())) { score += 10; break } }
@@ -402,78 +427,93 @@ function extractForms(html: string, baseUrl: string): {
 }
 
 /**
- * Verify that a fetched HTML page actually contains a contact / inquiry form.
- * Rejects login pages, search boxes, newsletter signups, blog comments, thank-you pages, etc.
+ * Check a single form's context window for inquiry signals.
+ * Called once per <form> block found on the page.
  *
- * Design goals:
- *  - High precision over recall: when in doubt, reject.  GPT does the final call.
- *  - Textarea + specific Japanese/English inquiry keyword → accept.
- *  - Email/tel input + submit → only accept when keyword appears IN the form context,
- *    not just anywhere on the page (prevents newsletter-on-homepage false positives).
+ * @param formCtx  HTML slice: 800 chars before <form ...> + 5000 chars after
  */
-function validateFormPage(html: string): boolean {
-  // External form embeds always accepted (Google Forms, Tayori, typeform, etc.)
-  // These services render their own form UI via iframe/redirect so there's no <form> to parse.
-  if (/docs\.google\.com\/forms|form\.run|typeform\.com|jotform\.com|tayori\.com|formstack\.com|formzu\.net|form\.kintoneapp|mailform\.jp|mfcontacts\.com|formrun\.com|tally\.so|cognito-forms\.com|wufoo\.com/i.test(html)) return true
-  // LINE contact links — always valid contact method
-  if (/lin\.ee\/|page\.line\.me\/|accountpage\.line\.me\/|liff\.line\.me\//i.test(html)) return true
-
-  // Reject confirmed thank-you / completion pages
-  const titleM = html.match(/<title[^>]*>([^<]*)<\/title>/i)
-  const title = titleM ? titleM[1].toLowerCase() : ''
-  if (/送信完了|ありがとうございます|受け付けました|thank you|submission complete|success/.test(title)) {
-    if (!/<form[\s>]/i.test(html)) return false
-  }
-
-  // Reject pages whose title strongly suggests a non-contact page
-  // (news, blog, service list, map, access) with no form
-  if (/ニュース|news|プレスリリース|お知らせ一覧|アクセス|access|採用|recruit|サービス一覧|実績|ブログ|blog/.test(title)) {
-    if (!/<form[\s>]/i.test(html)) return false
-  }
-
-  if (!/<form[\s>]/i.test(html)) return false
-
-  // Reject forms that only contain hidden/checkbox inputs (social share buttons, CSRF-only)
-  // A real contact form must have at least one user-visible text/email/tel/textarea input.
-  const hasUserInput = /<input[^>]+type=["']?(text|email|tel|number|search|url)/i.test(html)
-    || /textarea/i.test(html)
+function _validateFormContext(formCtx: string): boolean {
+  // Reject forms that only contain hidden/checkbox inputs (social share, CSRF-only)
+  const hasUserInput = /<input[^>]+type=["']?(text|email|tel|number|search|url)/i.test(formCtx)
+    || /textarea/i.test(formCtx)
   if (!hasUserInput) return false
 
-  // ── Textarea path ────────────────────────────────────────────────────────
-  // Textarea is the strongest inquiry signal, but require the keyword to appear
-  // within the form context — NOT just anywhere on the page — to prevent blog
-  // comment sections on pages that happen to have a "お問い合わせ" nav link.
-  if (/textarea/i.test(html)) {
-    const formIdx = html.toLowerCase().indexOf('<form')
-    // Search a generous 800-char window before the form (headings) + 5000 after (fields+labels)
-    const formCtx = formIdx !== -1
-      ? html.slice(Math.max(0, formIdx - 800), Math.min(html.length, formIdx + 5000))
-      : html
+  // Reject WordPress / blog CMS comment forms.
+  // These have textarea + name/email but are comment sections, not inquiry forms.
+  if (/(?:class|id)=["'][^"']*(?:comment[-_]?form|wp-comment|respond|leave[-_]?a[-_]?reply)[^"']*["']/i.test(formCtx)) return false
+  // Also reject if the form/surrounding context talks about comments, not inquiries
+  const lCtx = formCtx.toLowerCase()
+  if (/コメント|comment|leave a reply|返信する|reply to/.test(lCtx) && !/お問い合わせ|ご連絡|ご相談|inquiry|contact/i.test(lCtx)) return false
+
+  // ── Textarea path ───────────────────────────────────────────────
+  // The 800-char pre-window often contains headings like "お問い合わせ"
+  // right above the form — strong signal for contact forms.
+  if (/textarea/i.test(formCtx)) {
     const INQUIRY_KW = /お問い合わせ|ご連絡|ご相談|お問合|inquiry|contact us|contact form|ご質問|お問い合わせ内容|お問合せ内容|メッセージ内容|ご意見/i
     if (INQUIRY_KW.test(formCtx)) return true
-    // Textarea without inquiry keyword in context: accept if name + email fields present
-    // (catches minimal contact forms that use generic field labels)
     const hasNameField = /<input[^>]+(name|id)=["']?(?:name|your[_-]?name|お名前|namae)/i.test(formCtx)
     const hasEmailField = /<input[^>]+type=["']?email/i.test(formCtx)
     if (hasNameField && hasEmailField) return true
-    // fallback: any text input + email field + submit in form context
     const hasTextInput = /<input[^>]+type=["']?text/i.test(formCtx)
     const hasSubmitFallback = /<(input|button)[^>]*type=["']?submit/i.test(formCtx)
     if (hasTextInput && hasEmailField && hasSubmitFallback) return true
   }
 
-  // ── Email/tel + submit path ──────────────────────────────────────────────
-  // Require the inquiry keyword to appear WITHIN the form element's HTML context
-  // (prevents newsletter signup on homepage from matching "contact" link text elsewhere).
-  const hasContactInput = /<input[^>]+type=["']?(email|tel)/i.test(html)
-  const hasSubmit = /<(input|button)[^>]*type=["']?submit/i.test(html)
+  // ── Email/tel + submit path ─────────────────────────────────────
+  // For forms without textarea, require the inquiry keyword to appear INSIDE
+  // the form (after the opening <form> tag), NOT just in the pre-window.
+  // This prevents newsletter signups whose pre-window includes a nav "お問い合わせ" link.
+  const hasContactInput = /<input[^>]+type=["']?(email|tel)/i.test(formCtx)
+  const hasSubmit = /<(input|button)[^>]*type=["']?submit/i.test(formCtx)
   if (hasContactInput && hasSubmit) {
-    const formIdx = html.toLowerCase().indexOf('<form')
-    const formContext = formIdx !== -1
-      ? html.slice(Math.max(0, formIdx - 500), Math.min(html.length, formIdx + 4000))
-      : html
-    const FORM_KW = /お問い合わせ|ご連絡|ご相談|お問合|inquiry|contact us|contact form|ご質問|お問い合わせ内容/i
-    if (FORM_KW.test(formContext)) return true
+    const formTagIdx = formCtx.toLowerCase().indexOf('<form')
+    const insideFormCtx = formTagIdx !== -1 ? formCtx.slice(formTagIdx) : formCtx
+    const FORM_KW = /お問い合わせ|ご連絡|ご相談|お問合|inquiry|contact us|contact form|ご質問|お問い合わせ内容|ご相談フォーム/i
+    if (FORM_KW.test(insideFormCtx)) return true
+  }
+
+  return false
+}
+
+/**
+ * Verify that a fetched HTML page actually contains a contact / inquiry form.
+ * Rejects login pages, search boxes, newsletter signups, blog comments, thank-you pages, etc.
+ *
+ * Design goals:
+ *  - High precision over recall: when in doubt, reject.  GPT does the final call.
+ *  - Scans ALL <form> blocks on the page — pages often have a search box first, then
+ *    the actual contact form; only checking the first form misses this pattern.
+ *  - Textarea + specific Japanese/English inquiry keyword → accept.
+ *  - Email/tel input + submit → only accept when keyword appears IN the form context.
+ */
+function validateFormPage(html: string): boolean {
+  // External form embeds always accepted (Google Forms, Tayori, typeform, etc.)
+  if (/docs\.google\.com\/forms|form\.run|typeform\.com|jotform\.com|tayori\.com|formstack\.com|formzu\.net|form\.kintoneapp|mailform\.jp|mfcontacts\.com|formrun\.com|tally\.so|cognito-forms\.com|wufoo\.com/i.test(html)) return true
+  // LINE contact links — always valid contact method
+  if (/lin\.ee\/|page\.line\.me\/|accountpage\.line\.me\/|liff\.line\.me\//i.test(html)) return true
+
+  // Reject confirmed thank-you / completion pages (no form present)
+  const titleM = html.match(/<title[^>]*>([^<]*)<\/title>/i)
+  const title = titleM ? titleM[1].toLowerCase() : ''
+  if (/送信完了|ありがとうございます|受け付けました|thank you|submission complete|success/.test(title)) {
+    if (!/<form[\s>]/i.test(html)) return false
+  }
+  // Reject pages whose title strongly suggests non-contact content and have no form
+  if (/ニュース|news|プレスリリース|お知らせ一覧|アクセス|access|採用|recruit|サービス一覧|実績|ブログ|blog|プライバシー|privacy|利用規約|terms|サイトマップ|sitemap/.test(title)) {
+    if (!/<form[\s>]/i.test(html)) return false
+  }
+
+  if (!/<form[\s>]/i.test(html)) return false
+
+  // ── Scan every <form> on the page ───────────────────────────────
+  // Many pages have a header search box (or newsletter signup) before the actual contact form.
+  // By iterating all forms we avoid missing the real inquiry form.
+  const lHtml = html.toLowerCase()
+  let pos = -1
+  while ((pos = lHtml.indexOf('<form', pos + 1)) !== -1) {
+    // Window: 800 chars before (headings/breadcrumbs) + 5000 after (labels + fields)
+    const formCtx = html.slice(Math.max(0, pos - 800), Math.min(html.length, pos + 5000))
+    if (_validateFormContext(formCtx)) return true
   }
 
   return false
@@ -484,21 +524,27 @@ function validateFormPage(html: string): boolean {
  * Ordered by likelihood. We try at most PROBE_LIMIT paths to keep latency bounded.
  */
 const PROBE_PATHS = [
-  // English / romaji paths (most common even on Japanese sites)
+  // English / romaji — most common even on Japanese sites
   '/contact', '/inquiry', '/contact/', '/inquiry/',
   // Japanese romaji variants
   '/otoiawase', '/toiawase', '/otoiawase/', '/toiawase/',
-  '/mailform', '/form', '/renraku', '/goiken',
-  // With extensions
+  '/mailform', '/mailform/', '/form', '/renraku', '/goiken',
+  // With common extensions
   '/contact.html', '/inquiry.html', '/contact.php', '/inquiry.php',
   '/contact/index.html', '/inquiry/index.html',
-  // CGI scripts common on Japanese hosting
-  '/contact/index.php', '/inquiry/index.php',
-  // URL-encoded Japanese paths (for sites that use Japanese in the path)
+  '/contact/index.php',  '/inquiry/index.php',
+  '/mailform/index.html', '/mailform/index.php',
+  // CGI patterns common on Japanese hosting (rental servers: lolipop, xserver, sakura)
+  '/cgi-bin/contact.cgi', '/cgi-bin/inquiry.cgi', '/cgi-bin/form.cgi',
+  '/cgi-bin/mailform.cgi', '/cgi-bin/contact.pl', '/cgi-bin/form.pl',
+  // WordPress / common CMS slugs
+  '/contact-us', '/contact-us/', '/get-in-touch', '/send-message',
+  // URL-encoded Japanese paths
   '/%E3%81%8A%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B',  // /お問い合わせ
   '/%E5%95%8F%E3%81%84%E5%90%88%E3%82%8F%E3%81%9B',            // /問い合わせ
+  '/%E3%81%8A%E5%95%8F%E5%90%88%E3%81%9B',                     // /お問合せ
 ]
-const PROBE_LIMIT = 5  // max paths to probe per site (increased from 4)
+const PROBE_LIMIT = 6  // max paths to probe per site
 
 async function processItem(
   url: string,
@@ -527,12 +573,18 @@ async function processItem(
 
   // Domains whose presence in finalUrl means the link is NOT an inquiry form
   const REDIRECT_REJECT_HOSTS = [
-    ...['coubic.com','airreserve.net','reserva.be','minimo.io',
-       'tablecheck.com','ebica.jp','toreta.in','hotpepper.jp',
-       'beauty.hotpepper.jp','select-type.com','icalendar.jp',
-       'reservestock.jp','reservia.jp'],
-    ...['facebook.com','instagram.com','twitter.com','x.com','linkedin.com',
-       'tiktok.com','youtube.com','pinterest.com','maps.google.com'],
+    // Booking / reservation services
+    'coubic.com','airreserve.net','reserva.be','minimo.io',
+    'tablecheck.com','ebica.jp','toreta.in','hotpepper.jp',
+    'beauty.hotpepper.jp','select-type.com','icalendar.jp',
+    'reservestock.jp','reservia.jp',
+    'epark.jp','eparkeclinic.jp',
+    'reservawith.google.com','business.google.com',
+    'caresul.jp','freqy.jp','benri-yoyaku.jp',
+    'jalan.net','ikyu.com','booking.com','agoda.com','airbnb.com','airbnb.jp',
+    // Social media
+    'facebook.com','instagram.com','twitter.com','x.com','linkedin.com',
+    'tiktok.com','youtube.com','pinterest.com','maps.google.com',
   ]
 
   const tryFetchAndValidate = async (targetUrl: string, cachedHtml: string | null): Promise<{ html: string; valid: boolean; finalUrl?: string } | null> => {
