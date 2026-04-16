@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Trash2, Plus, Save, ChevronDown, ChevronRight, ToggleLeft, ToggleRight } from 'lucide-react'
+import { Trash2, Plus, Save, ChevronDown, ChevronRight, ToggleLeft, ToggleRight, Settings2 } from 'lucide-react'
 import type { Preset, SearchRun } from '@/lib/types'
 
 export default function SettingsPage() {
@@ -11,9 +11,84 @@ export default function SettingsPage() {
         <h1 className="text-lg font-semibold text-gray-900">設定</h1>
         <p className="text-sm text-gray-500 mt-1">プリセット管理・検索設定の編集</p>
       </div>
+      <QueueSettings />
       <PresetsSection />
       <RunsSection />
     </div>
+  )
+}
+
+/* ─── Queue Settings Section ─────────────────────────── */
+function QueueSettings() {
+  const [maxConcurrent, setMaxConcurrentState] = useState<number | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    fetch('/api/queue')
+      .then((r) => r.json())
+      .then((d) => { if (d.success) setMaxConcurrentState(d.data.maxConcurrent) })
+      .catch(() => {})
+  }, [])
+
+  const handleSave = async (n: number) => {
+    setSaving(true)
+    setError('')
+    try {
+      const r = await fetch('/api/queue', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ maxConcurrent: n }),
+      })
+      const d = await r.json()
+      if (d.success) {
+        setMaxConcurrentState(d.data.maxConcurrent)
+        setSaved(true)
+        setTimeout(() => setSaved(false), 1500)
+      } else {
+        setError(d.error || '保存失敗')
+      }
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (maxConcurrent === null) return null
+
+  return (
+    <section className="bg-white rounded border border-gray-200 shadow-sm p-5">
+      <div className="flex items-center gap-2 mb-4">
+        <Settings2 className="w-4 h-4 text-gray-500" />
+        <h2 className="text-sm font-semibold text-gray-800">キュー設定</h2>
+      </div>
+      {error && <div className="text-red-600 text-sm mb-3">{error}</div>}
+      <div className="flex items-center gap-4">
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">最大同時実行数</label>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => handleSave(Math.max(1, maxConcurrent - 1))}
+              disabled={saving || maxConcurrent <= 1}
+              className="w-7 h-7 flex items-center justify-center text-gray-600 bg-gray-100 rounded hover:bg-gray-200 disabled:opacity-40 text-lg font-bold"
+            >−</button>
+            <span className="text-2xl font-bold text-gray-900 w-8 text-center">{maxConcurrent}</span>
+            <button
+              onClick={() => handleSave(Math.min(10, maxConcurrent + 1))}
+              disabled={saving || maxConcurrent >= 10}
+              className="w-7 h-7 flex items-center justify-center text-gray-600 bg-gray-100 rounded hover:bg-gray-200 disabled:opacity-40 text-lg font-bold"
+            >+</button>
+          </div>
+        </div>
+        <div className="text-xs text-gray-400 max-w-xs">
+          n8nワークフローを同時に何件まで実行するかを設定します。
+          サーバーリソースに合わせて調整してください（推奨: 1〜5）。
+          {saved && <span className="ml-2 text-green-600 font-medium">✓ 保存済み</span>}
+        </div>
+      </div>
+    </section>
   )
 }
 

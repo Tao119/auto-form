@@ -285,11 +285,19 @@ function extractForms(html: string, baseUrl: string): {
 
 /**
  * Verify that a fetched HTML page actually contains a contact form.
- * Rejects login pages, search boxes, booking-only pages, etc.
+ * Rejects login pages, search boxes, thank-you pages, booking-only pages, etc.
  */
 function validateFormPage(html: string): boolean {
   // External form embeds (iframe or script pointing to known form SaaS)
   if (/docs\.google\.com\/forms|form\.run|typeform\.com|jotform\.com|tayori\.com|formstack\.com|coubic\.com/i.test(html)) return true
+
+  // Reject thank-you / completion pages (no point sending to these)
+  const titleM = html.match(/<title[^>]*>([^<]*)<\/title>/i)
+  const title = titleM ? titleM[1].toLowerCase() : ''
+  if (/送信完了|ありがとうございます|受け付けました|thank you|submission|complete|success/.test(title)) {
+    // Still check for a form — some sites show a thank-you AND the form on the same page
+    if (!/<form[\s>]/i.test(html)) return false
+  }
 
   const hasForm = /<form[\s>]/i.test(html)
   if (!hasForm) return false
