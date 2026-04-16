@@ -562,6 +562,14 @@ async function processItem(
   }
 
   if (fetchFormPage && extracted.formUrl && extracted.hasContactLink) {
+    // LINE URLs are deep-link redirects that can't be validated via HTTP fetch.
+    // Accept them directly — they were already classified as LINE by extractForms.
+    const LINE_URL_RE = /^https?:\/\/(lin\.ee|page\.line\.me|accountpage\.line\.me|liff\.line\.me)\//i
+    if (LINE_URL_RE.test(extracted.formUrl)) {
+      extracted.formTypeHint = 'LINE'
+      return { url, baseUrl, ...extracted, formPageText, formPageTitle, error: null }
+    }
+
     // If formUrl is the HP itself (inline form), reuse the already-fetched HTML
     const isInlinePage = extracted.formUrl === baseUrl
     const formHtml = isInlinePage ? hpFetch.html : null
