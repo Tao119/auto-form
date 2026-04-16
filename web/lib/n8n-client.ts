@@ -57,11 +57,19 @@ export async function listExecutions(limit = 30): Promise<{ data: N8nExecution[]
   return res.json()
 }
 
+// In-memory cache for health status (30-second TTL in Node.js process)
+let _healthCache: { result: boolean; expiresAt: number } | null = null
+
 export async function checkN8nHealth(): Promise<boolean> {
+  const now = Date.now()
+  if (_healthCache && now < _healthCache.expiresAt) return _healthCache.result
   try {
     const res = await fetch(`${BASE_URL}/healthz`, { signal: AbortSignal.timeout(5000) })
-    return res.ok
+    const result = res.ok
+    _healthCache = { result, expiresAt: now + 30_000 }
+    return result
   } catch {
+    _healthCache = { result: false, expiresAt: now + 15_000 }
     return false
   }
 }
