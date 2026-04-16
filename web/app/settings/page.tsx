@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Trash2, Plus, Save, ChevronDown, ChevronRight, ToggleLeft, ToggleRight, Settings2 } from 'lucide-react'
+import { Trash2, Plus, Save, ChevronDown, ChevronRight, ToggleLeft, ToggleRight, Settings2, Wrench } from 'lucide-react'
 import type { Preset, SearchRun } from '@/lib/types'
 
 export default function SettingsPage() {
@@ -14,6 +14,7 @@ export default function SettingsPage() {
       <QueueSettings />
       <PresetsSection />
       <RunsSection />
+      <MaintenanceSection />
     </div>
   )
 }
@@ -383,6 +384,62 @@ function RunsSection() {
           ))}
         </div>
       )}
+    </section>
+  )
+}
+
+/* ─── Maintenance Section ─────────────────────────────── */
+function MaintenanceSection() {
+  const [running, setRunning] = useState(false)
+  const [result, setResult] = useState<{ staleRunsExpired: number; walCheckpointPages: number; vacuumDone: boolean; dbSizeBytes: number } | null>(null)
+  const [error, setError] = useState('')
+
+  const handleRun = async () => {
+    setRunning(true)
+    setError('')
+    setResult(null)
+    try {
+      const r = await fetch('/api/admin/maintenance', { method: 'POST' })
+      const d = await r.json()
+      if (d.success) {
+        setResult({ staleRunsExpired: d.staleRunsExpired, walCheckpointPages: d.walCheckpointPages, vacuumDone: d.vacuumDone, dbSizeBytes: d.dbSizeBytes })
+      } else {
+        setError(d.error || 'メンテナンス失敗')
+      }
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  return (
+    <section className="bg-white rounded border border-gray-200 shadow-sm p-5">
+      <div className="flex items-center gap-2 mb-4">
+        <Wrench className="w-4 h-4 text-gray-500" />
+        <h2 className="text-sm font-semibold text-gray-800">DBメンテナンス</h2>
+      </div>
+      <p className="text-xs text-gray-500 mb-4">
+        WALチェックポイントとVACUUMを実行してディスク使用量を最適化します。
+        大量削除後や定期的に実行することを推奨します。
+      </p>
+      {error && <div className="text-red-600 text-sm mb-3">{error}</div>}
+      {result && (
+        <div className="text-xs text-gray-600 bg-gray-50 rounded p-3 mb-3 space-y-1">
+          <div>✓ VACUUM 完了</div>
+          <div>✓ WAL チェックポイント: {result.walCheckpointPages} ページ</div>
+          <div>✓ 失効ラン自動終了: {result.staleRunsExpired} 件</div>
+          <div>✓ DB サイズ: {(result.dbSizeBytes / 1024).toFixed(1)} KB</div>
+        </div>
+      )}
+      <button
+        onClick={handleRun}
+        disabled={running}
+        className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-gray-700 hover:bg-gray-800 disabled:bg-gray-400 text-white rounded transition-colors"
+      >
+        <Wrench className="w-3 h-3" />
+        {running ? '実行中...' : 'メンテナンス実行'}
+      </button>
     </section>
   )
 }

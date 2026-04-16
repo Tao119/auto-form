@@ -407,7 +407,19 @@ function validateFormPage(html: string): boolean {
     if (!/<form[\s>]/i.test(html)) return false
   }
 
+  // Reject pages whose title strongly suggests a non-contact page
+  // (news, blog, service list, map, access) with no form
+  if (/ニュース|news|プレスリリース|お知らせ一覧|アクセス|access|採用|recruit|サービス一覧|実績|ブログ|blog/.test(title)) {
+    if (!/<form[\s>]/i.test(html)) return false
+  }
+
   if (!/<form[\s>]/i.test(html)) return false
+
+  // Reject forms that only contain hidden/checkbox inputs (social share buttons, CSRF-only)
+  // A real contact form must have at least one user-visible text/email/tel/textarea input.
+  const hasUserInput = /<input[^>]+type=["']?(text|email|tel|number|search|url)/i.test(html)
+    || /textarea/i.test(html)
+  if (!hasUserInput) return false
 
   // ── Textarea path ────────────────────────────────────────────────────────
   // Textarea is the strongest inquiry signal.  Accept only when a specific
@@ -581,6 +593,10 @@ async function processItem(
         const lenRatio = Math.abs(hpLen - probeHtml.length) / Math.max(hpLen, probeHtml.length)
         if (lenRatio < 0.03) continue
       }
+
+      // 4. Very short response (< 500 bytes stripped) → likely an error/redirect stub
+      const probeTextLen = probeHtml.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().length
+      if (probeTextLen < 500) continue
       // ───────────────────────────────────────────────────────────────
 
       if (!validateFormPage(probeHtml)) continue
