@@ -1222,16 +1222,30 @@ async function processItem(
   let formPageText: string | null = null
   let formPageTitle: string | null = null
 
-  // Early reject: if the HP URL itself redirected to a booking/SNS service,
-  // the company has no independent website — skip all processing.
+  // Early booking-redirect detection: if the HP URL redirected to a booking/SNS platform,
+  // the company has no independent contact form, but we still capture the booking URL
+  // so it appears in the DB as formType='reservation'.  Phone/address are extracted from
+  // the landing-page HTML (booking platforms like HPB typically show the salon's phone).
   if (hpFetch.finalUrl && hpFetch.finalUrl !== url) {
     try {
       const hpFinalHost = new URL(hpFetch.finalUrl).hostname.replace(/^www\./, '')
       if (REDIRECT_REJECT_HOSTS.some((h) => hpFinalHost === h || hpFinalHost.endsWith('.' + h))) {
+        // Extract phone/address from the booking-platform page HTML
+        const bookingExtracted = extractForms(hpFetch.html, hpFetch.finalUrl)
         return {
-          url, baseUrl, formUrl: null, email: null, phone: null, address: null,
-          hasContactLink: false, hasInlineForm: false, hasEmailContact: false,
-          formTypeHint: null, contactLinks: [], formPageText: null, formPageTitle: null, error: null,
+          url, baseUrl,
+          formUrl: hpFetch.finalUrl,       // booking platform URL is the only "form"
+          email: bookingExtracted.email,
+          phone: bookingExtracted.phone,
+          address: bookingExtracted.address,
+          hasContactLink: true,             // mark as found so downstream can decide
+          hasInlineForm: false,
+          hasEmailContact: !!bookingExtracted.email,
+          formTypeHint: 'booking',          // explicit booking classification
+          contactLinks: [],
+          formPageText: null,
+          formPageTitle: null,
+          error: null,
         }
       }
     } catch { /* ignore */ }
@@ -1572,6 +1586,20 @@ async function processItem(
       extracted.formTypeHint = probeExtracted.formTypeHint || 'inquiry'
       break
     }
+  }
+
+  // Fallback: if no form was found but the HP URL itself is a known booking platform,
+  // capture it as formType='booking' so it's recorded as a reservation-type entry.
+  // This handles salons/clinics whose Google Places websiteUri IS the booking platform URL.
+  if (!extracted.formUrl && !extracted.hasContactLink) {
+    try {
+      const urlHost = new URL(url).hostname.replace(/^www\./, '')
+      if (BOOKING_URL_HOSTS.some((h) => urlHost === h || urlHost.endsWith('.' + h))) {
+        extracted.formUrl = url
+        extracted.hasContactLink = true
+        extracted.formTypeHint = 'booking'
+      }
+    } catch { /* ignore */ }
   }
 
   return { url, baseUrl, ...extracted, formPageText, formPageTitle, error: null }

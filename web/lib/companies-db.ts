@@ -443,7 +443,7 @@ export function addCompanies(rows: CompanyInput[]): { added: number; duplicates:
         if (normForm && row.formUrl) {
           const existing = findByHpUrl.get({ normHp }) as { id: string } | undefined
           if (existing) {
-            const resolvedFormType = isLineUrl(row.formUrl) ? 'LINE' : (row.formType || '')
+            const resolvedFormType = isLineUrl(row.formUrl) ? 'LINE' : (row.formType === 'booking' ? 'reservation' : (row.formType || ''))
             upgradeFormData.run({
               id: existing.id,
               formUrl: row.formUrl,
@@ -464,10 +464,12 @@ export function addCompanies(rows: CompanyInput[]): { added: number; duplicates:
         continue
       }
 
-      // Override GPT stub classification for LINE messenger links
+      // Normalise form type:
+      // - LINE messenger URLs always override to 'LINE' regardless of GPT stub classification
+      // - 'booking' is the scraper-internal hint; persist as 'reservation' in the DB
       const resolvedFormType = row.formUrl && isLineUrl(row.formUrl)
         ? 'LINE'
-        : (row.formType || '')
+        : (row.formType === 'booking' ? 'reservation' : (row.formType || ''))
       insert.run({
         id: generateId(),
         name: row.name || '',

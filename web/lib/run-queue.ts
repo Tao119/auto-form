@@ -1,7 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import type { QueueJob, QueueData, ExecuteParams } from './types'
-import { updateRunStatus, expireStaleRuns } from './project-manager'
+import { updateRunStatus, expireStaleRuns, getProjectRun } from './project-manager'
 
 const DATA_DIR = path.join(process.cwd(), 'data')
 const QUEUE_FILE = path.join(DATA_DIR, 'queue.json')
@@ -18,10 +18,25 @@ function recoverStaleActiveJobs(data: QueueData): void {
   if (stale.length === 0) return
 
   for (const job of stale) {
+    // Before marking as failed, check if the run already succeeded.
+    // This handles hot-reload restarts where n8n called the completion callback
+    // just before (or just after) the server restarted — the run status in
+    // project-manager would already show 'success' in that case.
+    const existingRun = getProjectRun(job.runId)
+    if (existingRun?.status === 'success') {
+      // Run completed successfully — just sync the queue job status
+      job.status = 'completed'
+      job.completedAt = job.completedAt || new Date().toISOString()
+      continue
+    }
+
     job.status = 'failed'
     job.completedAt = new Date().toISOString()
     job.error = 'server_restart'
-    updateRunStatus(job.runId, 'error')
+    // Only update run status if it wasn't already resolved
+    if (existingRun && existingRun.status !== 'error') {
+      updateRunStatus(job.runId, 'error')
+    }
   }
 }
 
