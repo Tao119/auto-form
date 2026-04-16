@@ -522,9 +522,20 @@ async function processItem(
   let formPageText: string | null = null
   let formPageTitle: string | null = null
 
-  const tryFetchAndValidate = async (targetUrl: string, cachedHtml: string | null): Promise<{ html: string; valid: boolean } | null> => {
+  // Domains whose presence in finalUrl means the link is NOT an inquiry form
+  const REDIRECT_REJECT_HOSTS = [
+    ...['coubic.com','airreserve.net','reserva.be','minimo.io',
+       'tablecheck.com','ebica.jp','toreta.in','hotpepper.jp',
+       'beauty.hotpepper.jp','select-type.com','icalendar.jp',
+       'reservestock.jp','reservia.jp'],
+    ...['facebook.com','instagram.com','twitter.com','x.com','linkedin.com',
+       'tiktok.com','youtube.com','pinterest.com','maps.google.com'],
+  ]
+
+  const tryFetchAndValidate = async (targetUrl: string, cachedHtml: string | null): Promise<{ html: string; valid: boolean; finalUrl?: string } | null> => {
     try {
       let html: string
+      let finalUrl: string | undefined
       if (cachedHtml !== null) {
         html = cachedHtml
       } else {
@@ -532,9 +543,18 @@ async function processItem(
         // Reject 4xx/5xx responses (broken links, access-denied, etc.)
         if (result.statusCode && result.statusCode >= 400) return null
         html = result.html
+        finalUrl = result.finalUrl
+
+        // Reject if the form URL redirected to a booking/SNS service
+        if (finalUrl && finalUrl !== targetUrl) {
+          try {
+            const finalHost = new URL(finalUrl).hostname.replace(/^www\./, '')
+            if (REDIRECT_REJECT_HOSTS.some((h) => finalHost === h || finalHost.endsWith('.' + h))) return null
+          } catch { /* ignore */ }
+        }
       }
       if (!html) return null
-      return { html, valid: validateFormPage(html) }
+      return { html, valid: validateFormPage(html), finalUrl }
     } catch { return null }
   }
 
