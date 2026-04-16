@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import {
   ArrowLeft, Download, Search, RefreshCw, X,
   CheckCircle, XCircle, Clock, Play, FolderOpen, Copy, Check,
@@ -74,6 +74,7 @@ function saveFilters(projectId: string, data: FilterState & { runId: string; sor
 export default function ProjectResultsPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const router = useRouter()
+  const searchParams = useSearchParams()
 
   // Restore persisted state once projectId is known
   const [_filterRestored, setFilterRestored] = useState(false)
@@ -100,7 +101,8 @@ export default function ProjectResultsPage() {
   const [retryingRunId, setRetryingRunId] = useState<string | null>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
 
-  // Restore persisted filters from localStorage on first mount
+  // Restore persisted filters from localStorage on first mount.
+  // URL param ?run= takes priority over localStorage (used when navigating from history page).
   useEffect(() => {
     if (!projectId) return
     const saved = loadSavedFilters(projectId)
@@ -116,7 +118,13 @@ export default function ProjectResultsPage() {
         search: '',  // never restore search — too stale
       })
     }
-    if (saved.runId !== undefined) setSelectedRunId(saved.runId)
+    // URL param ?run= overrides localStorage (direct link from history page)
+    const runParam = searchParams.get('run')
+    if (runParam) {
+      setSelectedRunId(runParam)
+    } else if (saved.runId !== undefined) {
+      setSelectedRunId(saved.runId)
+    }
     if (saved.sortBy) setSortBy(saved.sortBy)
     if (saved.sortDir) setSortDir(saved.sortDir)
     setFilterRestored(true)

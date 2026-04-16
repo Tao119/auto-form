@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   CheckCircle2, XCircle, Clock, AlertCircle, RefreshCw,
-  FolderOpen, ChevronRight, Play, Database, Zap, DollarSign, ListOrdered,
+  FolderOpen, ChevronRight, Play, Database, DollarSign, ListOrdered,
   Search, Filter, Trash2,
 } from 'lucide-react'
 import type { ProjectRun } from '@/lib/types'
@@ -50,6 +50,68 @@ function timeAgo(iso: string) {
   if (h < 24) return `${h}時間前`
   const d = Math.floor(h / 24)
   return `${d}日前`
+}
+
+// ── Cost breakdown tooltip ──────────────────────────────────────────
+const PLACES_UNIT = 0.032
+const PLACES_KW   = 4
+// gpt-4o-mini pricing (USD per 1M tokens)
+const GPT_INPUT_PRICE  = 0.15
+const GPT_OUTPUT_PRICE = 0.60
+
+function CostBreakdown({ run }: { run: RunWithProject }) {
+  const subArea  = (run.results as { subAreaCount?: number } | undefined)?.subAreaCount
+  const placesCost = subArea !== undefined && subArea > 0
+    ? subArea * PLACES_KW * PLACES_UNIT : 0
+  const gptCost = run.tokensInput !== undefined
+    ? (run.tokensInput * GPT_INPUT_PRICE + (run.tokensOutput ?? 0) * GPT_OUTPUT_PRICE) / 1_000_000
+    : 0
+
+  const total = placesCost + gptCost || run.estimatedCostUsd
+  if (!total) return <span className="text-gray-300 text-xs">-</span>
+
+  const hasBreakdown = placesCost > 0 || gptCost > 0
+
+  return (
+    <div className="relative group inline-block">
+      <div className="flex items-center gap-1 text-xs text-gray-700 cursor-default">
+        <DollarSign className="w-3 h-3 text-green-500 flex-shrink-0" />
+        <span className="font-medium">${total.toFixed(2)}</span>
+        {hasBreakdown && <span className="text-gray-400 text-[10px]">▾</span>}
+      </div>
+      {hasBreakdown && (
+        <div className="absolute z-20 bottom-full left-0 mb-1.5 hidden group-hover:block bg-gray-900 text-white text-xs rounded-md px-3 py-2 whitespace-nowrap shadow-xl min-w-max border border-gray-700">
+          <div className="font-semibold text-gray-300 mb-1.5 text-[11px]">コスト内訳</div>
+          {placesCost > 0 && (
+            <div className="flex items-center justify-between gap-6 mb-1">
+              <span className="text-gray-400">Google Places API</span>
+              <span className="text-green-400 font-mono">${placesCost.toFixed(3)}</span>
+            </div>
+          )}
+          {placesCost > 0 && subArea !== undefined && (
+            <div className="text-gray-500 text-[10px] mb-1 pl-2">
+              {subArea}エリア × {PLACES_KW}KW × ${PLACES_UNIT}/req
+            </div>
+          )}
+          {gptCost > 0 && (
+            <div className="flex items-center justify-between gap-6 mb-1">
+              <span className="text-gray-400">OpenAI GPT</span>
+              <span className="text-blue-400 font-mono">${gptCost.toFixed(4)}</span>
+            </div>
+          )}
+          {gptCost > 0 && run.tokensInput !== undefined && (
+            <div className="text-gray-500 text-[10px] mb-1 pl-2">
+              in {run.tokensInput.toLocaleString()} / out {(run.tokensOutput ?? 0).toLocaleString()} tok
+            </div>
+          )}
+          <div className="border-t border-gray-700 mt-1.5 pt-1.5 flex justify-between gap-6">
+            <span className="text-gray-300 font-semibold">合計</span>
+            <span className="text-white font-mono font-semibold">${total.toFixed(3)}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 const STATUS_OPTIONS = [
@@ -280,7 +342,7 @@ export default function HistoryPage() {
                   {/* Project */}
                   <td className="px-4 py-3">
                     <button
-                      onClick={() => router.push(`/results/${run.projectId}`)}
+                      onClick={() => router.push(`/results/${run.projectId}?run=${run.id}`)}
                       className="flex items-center gap-1.5 text-xs text-gray-600 hover:text-blue-600 transition-colors"
                     >
                       <FolderOpen className="w-3.5 h-3.5 flex-shrink-0" />
@@ -371,30 +433,7 @@ export default function HistoryPage() {
 
                   {/* Token / Cost */}
                   <td className="px-4 py-3">
-                    {run.tokensInput !== undefined ? (
-                      <div className="space-y-0.5">
-                        <div className="flex items-center gap-1 text-xs text-gray-600">
-                          <Zap className="w-3 h-3 text-yellow-500 flex-shrink-0" />
-                          {((run.tokensInput + (run.tokensOutput ?? 0)) / 1000).toFixed(1)}k tok
-                        </div>
-                        {run.estimatedCostUsd !== undefined && (
-                          <div className="flex items-center gap-1 text-xs text-gray-400">
-                            <DollarSign className="w-3 h-3 text-green-500 flex-shrink-0" />
-                            ${run.estimatedCostUsd.toFixed(2)}
-                          </div>
-                        )}
-                      </div>
-                    ) : run.estimatedCostUsd !== undefined ? (
-                      <div className="space-y-0.5">
-                        <div className="flex items-center gap-1 text-xs text-gray-400">
-                          <DollarSign className="w-3 h-3 text-green-500 flex-shrink-0" />
-                          ${run.estimatedCostUsd.toFixed(2)}
-                          <span className="text-gray-300 text-xs">Places</span>
-                        </div>
-                      </div>
-                    ) : (
-                      <span className="text-gray-300 text-xs">-</span>
-                    )}
+                    <CostBreakdown run={run} />
                   </td>
 
                   {/* Start time */}
@@ -415,7 +454,7 @@ export default function HistoryPage() {
                     <div className="flex items-center gap-2">
                       {(run.status === 'success' || run.status === 'completed') && run.itemsWritten && run.itemsWritten > 0 ? (
                         <button
-                          onClick={() => router.push(`/results/${run.projectId}`)}
+                          onClick={() => router.push(`/results/${run.projectId}?run=${run.id}`)}
                           className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 transition-colors"
                         >
                           結果を見る
