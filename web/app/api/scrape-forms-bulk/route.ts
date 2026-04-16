@@ -66,10 +66,15 @@ const EXTERNAL_FORM_HOSTS = [
   'app.getresponse.com',
   'lin.ee','page.line.me','accountpage.line.me','liff.line.me',
   'mailchimp.com','zoho.com',
-  // Additional services
   'forms.office.com','forms.microsoft.com',
   '123formbuilder.com','formassembly.com',
   'forms.app','tripetto.app',
+  // Japanese form services missing from the fast-pass list
+  'mfcontact.com','mfcontacts.com','mailform.jp',
+  // Additional Japanese form/CRM services
+  'gmomakeform.com','formhub.jp','questant.jp',
+  'sendinblue.com','brevo.com',
+  'f-formz.com','ws.formzu.net',
 ]
 // URL path suffixes that clearly indicate non-contact pages.
 // Trailing boundary (\/|\.|\?|$) prevents partial matches: /recruit-info is NOT rejected.
@@ -98,7 +103,7 @@ const REDIRECT_REJECT_HOSTS = [
   'tiktok.com','youtube.com','pinterest.com','maps.google.com',
 ]
 // Fast-pass for known external form SaaS — page is a valid contact form without further analysis
-const EXTERNAL_FORM_FAST_PASS_RE = /docs\.google\.com\/forms|forms\.gle|form\.run|formrun\.com|typeform\.com|jotform\.com|tayori\.com|formstack\.com|formzu\.net|form\.kintoneapp|kintone\.com|freeml\.net|mailform\.jp|mfcontact\.com|mfcontacts\.com|formmailer\.jp|tally\.so|paperform\.co|cognito-forms\.com|wufoo\.com|surveymonkey\.com|share\.hsforms\.com|forms\.hubspot\.com|share\.formsite\.com|app\.getresponse\.com|mailchimp\.com|zoho\.com|forms\.office\.com|forms\.microsoft\.com|123formbuilder\.com|formassembly\.com|forms\.app|tripetto\.app/i
+const EXTERNAL_FORM_FAST_PASS_RE = /docs\.google\.com\/forms|forms\.gle|form\.run|formrun\.com|typeform\.com|jotform\.com|tayori\.com|formstack\.com|formzu\.net|form\.kintoneapp|kintone\.com|freeml\.net|mailform\.jp|mfcontact\.com|mfcontacts\.com|formmailer\.jp|tally\.so|paperform\.co|cognito-forms\.com|wufoo\.com|surveymonkey\.com|share\.hsforms\.com|forms\.hubspot\.com|share\.formsite\.com|app\.getresponse\.com|mailchimp\.com|zoho\.com|forms\.office\.com|forms\.microsoft\.com|123formbuilder\.com|formassembly\.com|forms\.app|tripetto\.app|gmomakeform\.com|formhub\.jp|questant\.jp|sendinblue\.com|brevo\.com|f-formz\.com|ws\.formzu\.net/i
 
 const Schema = z.object({
   items: z.array(z.object({
@@ -243,6 +248,8 @@ function stripHtmlTags(raw: string): string {
   return raw
     .replace(/<script[\s\S]*?<\/script>/gi, '')
     .replace(/<style[\s\S]*?<\/style>/gi, '')
+    // Preserve label text with a space separator (helps GPT understand form fields)
+    .replace(/<label[^>]*>([\s\S]*?)<\/label>/gi, ' $1 ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
@@ -568,6 +575,11 @@ function _validateFormContext(formCtx: string): boolean {
     const hasEmailLikeField = /<input[^>]+(name|id)=["']?(?:e-?mail|mail|メール|your.?mail|your.?email|yourmail)/i.test(formCtx)
     const textInputCount = (formCtx.match(/<input[^>]+type=["']?text/gi) || []).length
     if (hasSubmitFallback && textInputCount >= 2 && hasEmailLikeField) return true
+
+    // Phone-only contact: name + tel input + textarea (common in beauty/medical/dental)
+    // Require name field to distinguish from general feedback/survey forms.
+    const hasTelInput = /<input[^>]+type=["']?tel/i.test(formCtx)
+    if (hasSubmitFallback && hasTelInput && hasNameField) return true
   }
 
   // ── Email/tel + submit path ─────────────────────────────────────
