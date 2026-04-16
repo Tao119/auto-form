@@ -508,6 +508,7 @@ export default function ProjectResultsPage() {
                 <th className="text-left px-3 py-3 text-xs text-gray-500 font-medium whitespace-nowrap">フォームURL</th>
                 <SortableHeader label="フォーム種別" column="formType" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
                 <SortableHeader label="ステータス" column="status" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+                <th className="text-left px-3 py-3 text-xs text-gray-500 font-medium whitespace-nowrap">備考</th>
                 <SortableHeader label="収集日時" column="collectedAt" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
                 {!selectedRunId && (
                   <th className="text-left px-3 py-3 text-xs text-gray-500 font-medium whitespace-nowrap">実行</th>
@@ -613,6 +614,16 @@ export default function ProjectResultsPage() {
                         <StatusBadge status={row['ステータス']} />
                       )}
                     </td>
+                    <td className="px-3 py-2.5 max-w-[160px]">
+                      {row.id ? (
+                        <InlineNotesInput
+                          id={row.id}
+                          notes={row['備考'] || ''}
+                        />
+                      ) : (
+                        <span className="text-gray-400 text-xs">{row['備考'] || '-'}</span>
+                      )}
+                    </td>
                     <td className="px-3 py-2.5 text-gray-400 text-xs whitespace-nowrap">{row['収集日時'] || '-'}</td>
                     {!selectedRunId && (
                       <td className="px-3 py-2.5 text-gray-400 text-xs whitespace-nowrap max-w-[120px] truncate" title={run?.label}>
@@ -652,6 +663,46 @@ export default function ProjectResultsPage() {
         )}
       </div>
     </div>
+  )
+}
+
+function InlineNotesInput({ id, notes }: { id: string; notes: string }) {
+  const [value, setValue] = useState(notes)
+  const [saving, setSaving] = useState(false)
+  const [dirty, setDirty] = useState(false)
+
+  const handleBlur = async () => {
+    if (!dirty) return
+    setSaving(true)
+    try {
+      await fetch('/api/companies', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, notes: value }),
+      })
+      setDirty(false)
+    } catch { /* ignore */ } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <input
+      type="text"
+      value={value}
+      onChange={(e) => { setValue(e.target.value); setDirty(true) }}
+      onBlur={handleBlur}
+      onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+      placeholder="備考..."
+      maxLength={500}
+      className={`w-full text-xs px-1.5 py-0.5 rounded border transition-colors focus:outline-none ${
+        saving
+          ? 'border-blue-300 bg-blue-50 text-blue-700'
+          : dirty
+          ? 'border-amber-300 bg-amber-50 text-gray-700'
+          : 'border-transparent bg-transparent text-gray-500 hover:border-gray-300 hover:bg-white focus:border-blue-400 focus:bg-white'
+      }`}
+    />
   )
 }
 

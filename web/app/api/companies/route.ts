@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getCompanies, addCompanies, updateCompanyStatus, batchUpdateStatus } from '@/lib/companies-db'
+import { getCompanies, addCompanies, updateCompany, batchUpdateStatus } from '@/lib/companies-db'
 import type { CompanyInput } from '@/lib/companies-db'
 import { z } from 'zod'
 
@@ -42,12 +42,18 @@ export async function POST(req: NextRequest) {
 }
 
 const PatchSchema = z.union([
-  z.object({ id: z.string(), status: z.string() }),
+  // Single company: supports status and/or notes update
+  z.object({
+    id: z.string(),
+    status: z.string().optional(),
+    notes: z.string().max(500).optional(),
+  }).refine((d) => d.status !== undefined || d.notes !== undefined, { message: 'status or notes required' }),
+  // Bulk status update (no notes support for batch)
   z.object({ ids: z.array(z.string()).min(1), status: z.string() }),
 ])
 
 // PATCH /api/companies
-// Body: { id: string, status: string } or { ids: string[], status: string }
+// Body: { id, status?, notes? }  or  { ids[], status }
 export async function PATCH(req: NextRequest) {
   try {
     const body = PatchSchema.parse(await req.json())
@@ -55,7 +61,7 @@ export async function PATCH(req: NextRequest) {
       const updated = batchUpdateStatus(body.ids, body.status)
       return NextResponse.json({ success: true, updated })
     } else {
-      const ok = updateCompanyStatus(body.id, body.status)
+      const ok = updateCompany(body.id, { status: body.status, notes: body.notes })
       return NextResponse.json({ success: ok, updated: ok ? 1 : 0 })
     }
   } catch (e) {

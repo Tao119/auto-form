@@ -324,11 +324,21 @@ export function removeByRunId(runId: string): number {
   return result.changes
 }
 
+/** Update one or more fields of a single company. Returns true if found. */
+export function updateCompany(id: string, updates: { status?: string; notes?: string }): boolean {
+  const db = getDb()
+  const sets: string[] = []
+  const params: Record<string, string> = { id }
+  if (updates.status !== undefined) { sets.push('status = @status'); params.status = updates.status }
+  if (updates.notes  !== undefined) { sets.push('notes = @notes');   params.notes  = updates.notes  }
+  if (sets.length === 0) return false
+  const result = db.prepare(`UPDATE companies SET ${sets.join(', ')} WHERE id = @id`).run(params)
+  return result.changes > 0
+}
+
 /** Update status of a single company. Returns true if found. */
 export function updateCompanyStatus(id: string, status: string): boolean {
-  const db = getDb()
-  const result = db.prepare('UPDATE companies SET status = @status WHERE id = @id').run({ id, status })
-  return result.changes > 0
+  return updateCompany(id, { status })
 }
 
 /** Batch update status for multiple companies. Returns number of rows updated. */
