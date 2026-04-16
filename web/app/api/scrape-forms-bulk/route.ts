@@ -458,6 +458,24 @@ function extractForms(html: string, baseUrl: string): {
       } catch { /* ignore */ }
     }
   }
+  // Detect embedded form services loaded via <script src="...">
+  // (e.g., form.run, Tayori, Microsoft Forms, HubSpot, etc.).
+  // When found, the current page IS the contact form URL.
+  if (!hasContactLink) {
+    const SCRIPT_SRC_RE = /<script[^>]+src=["']([^"']+)["']/gi
+    let scMatch: RegExpExecArray | null
+    while ((scMatch = SCRIPT_SRC_RE.exec(html)) !== null) {
+      try {
+        const scriptHost = new URL(scMatch[1], baseUrl).hostname.replace(/^www\./, '')
+        if (EXTERNAL_FORM_HOSTS.some((h) => scriptHost.includes(h))) {
+          // The form is embedded on this page — the page itself is the contact URL
+          formUrl = baseUrl
+          hasContactLink = true
+          break
+        }
+      } catch { /* ignore */ }
+    }
+  }
 
   const hasEmailContact = !!email
   // NOTE: email-only sites are NOT counted as having a contact form.
