@@ -413,7 +413,10 @@ function extractForms(html: string, baseUrl: string): {
  */
 function validateFormPage(html: string): boolean {
   // External form embeds always accepted (Google Forms, Tayori, typeform, etc.)
-  if (/docs\.google\.com\/forms|form\.run|typeform\.com|jotform\.com|tayori\.com|formstack\.com|coubic\.com|formzu\.net|form\.kintoneapp/i.test(html)) return true
+  // These services render their own form UI via iframe/redirect so there's no <form> to parse.
+  if (/docs\.google\.com\/forms|form\.run|typeform\.com|jotform\.com|tayori\.com|formstack\.com|formzu\.net|form\.kintoneapp|mailform\.jp|mfcontacts\.com|formrun\.com|tally\.so|cognito-forms\.com|wufoo\.com/i.test(html)) return true
+  // LINE contact links — always valid contact method
+  if (/lin\.ee\/|page\.line\.me\/|accountpage\.line\.me\/|liff\.line\.me\//i.test(html)) return true
 
   // Reject confirmed thank-you / completion pages
   const titleM = html.match(/<title[^>]*>([^<]*)<\/title>/i)
