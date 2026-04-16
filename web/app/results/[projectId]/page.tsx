@@ -9,11 +9,13 @@ import {
 import type { CompanyRow, Project, ProjectRun } from '@/lib/types'
 
 const STATUS_OPTIONS = ['全て', '未送信', '送信済み', 'エラー', 'スキップ']
+const FORM_TYPE_OPTIONS = ['全て', 'inquiry', 'LINE', 'unknown']
 
 interface FilterState {
   industry: string
   area: string
   status: string
+  formType: string
   search: string
 }
 
@@ -37,7 +39,7 @@ export default function ProjectResultsPage() {
   const [selectedRunId, setSelectedRunId] = useState<string>('')
   const [rows, setRows] = useState<CompanyRow[]>([])
   const [meta, setMeta] = useState<Meta>({ total: 0, page: 1, limit: 100, industries: [], areas: [] })
-  const [filters, setFilters] = useState<FilterState>({ industry: '', area: '', status: '', search: '' })
+  const [filters, setFilters] = useState<FilterState>({ industry: '', area: '', status: '', formType: '', search: '' })
   const [loading, setLoading] = useState(false)
   const [projLoading, setProjLoading] = useState(true)
   const [error, setError] = useState('')
@@ -68,6 +70,7 @@ export default function ProjectResultsPage() {
       if (filters.industry) params.set('industry', filters.industry)
       if (filters.area) params.set('area', filters.area)
       if (filters.status) params.set('status', filters.status)
+      if (filters.formType) params.set('formType', filters.formType)
       if (filters.search) params.set('search', filters.search)
       const res = await fetch(`/api/sheets/data?${params}`)
       const data = await res.json()
@@ -102,6 +105,7 @@ export default function ProjectResultsPage() {
       if (filters.industry) params.set('industry', filters.industry)
       if (filters.area) params.set('area', filters.area)
       if (filters.status) params.set('status', filters.status)
+      if (filters.formType) params.set('formType', filters.formType)
       const res = await fetch(`/api/sheets/export?${params}`)
       if (!res.ok) throw new Error('エクスポート失敗')
       const blob = await res.blob()
@@ -118,8 +122,8 @@ export default function ProjectResultsPage() {
     }
   }
 
-  const clearFilters = () => setFilters({ industry: '', area: '', status: '', search: '' })
-  const hasFilters = filters.industry || filters.area || filters.status || filters.search
+  const clearFilters = () => setFilters({ industry: '', area: '', status: '', formType: '', search: '' })
+  const hasFilters = filters.industry || filters.area || filters.status || filters.formType || filters.search
 
   if (projLoading) {
     return (
@@ -221,7 +225,7 @@ export default function ProjectResultsPage() {
 
       {/* Filters */}
       <div className="bg-white rounded border border-gray-200 p-3 shadow-sm">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <div className="md:col-span-1 relative">
             <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-gray-400" />
             <input
@@ -247,6 +251,17 @@ export default function ProjectResultsPage() {
           >
             <option value="">エリア: 全て</option>
             {meta.areas.map((a) => <option key={a} value={a}>{a}</option>)}
+          </select>
+          <select
+            value={filters.formType}
+            onChange={(e) => setFilters({ ...filters, formType: e.target.value })}
+            className="bg-white border border-gray-300 rounded px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none"
+          >
+            {FORM_TYPE_OPTIONS.map((t) => (
+              <option key={t} value={t === '全て' ? '' : t}>
+                {t === '全て' ? '種別: 全て' : t}
+              </option>
+            ))}
           </select>
           <div className="flex gap-2">
             <select
@@ -343,13 +358,19 @@ export default function ProjectResultsPage() {
                     <td className="px-3 py-2.5 max-w-[180px]">
                       {row['フォームURL'] ? (
                         <a href={row['フォームURL']} target="_blank" rel="noreferrer"
-                          className="text-green-700 hover:text-green-900 truncate block text-xs"
+                          className={`truncate block text-xs ${
+                            row['フォーム種別'] === 'LINE'
+                              ? 'text-orange-600 hover:text-orange-800'
+                              : 'text-green-700 hover:text-green-900'
+                          }`}
                           title={row['フォームURL']}>
                           {row['フォームURL'].replace(/^https?:\/\//, '').slice(0, 35)}
                         </a>
                       ) : <span className="text-gray-400">-</span>}
                     </td>
-                    <td className="px-3 py-2.5 text-gray-600 whitespace-nowrap text-xs">{row['フォーム種別'] || '-'}</td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-xs">
+                      <FormTypeBadge type={row['フォーム種別']} />
+                    </td>
                     <td className="px-3 py-2.5">
                       <StatusBadge status={row['ステータス']} />
                     </td>
@@ -400,6 +421,24 @@ function RunStatusDot({ status }: { status: ProjectRun['status'] }) {
   if (status === 'error') return <XCircle className="w-3 h-3 text-red-500" />
   if (status === 'running') return <Play className="w-3 h-3 text-blue-500" />
   return <Clock className="w-3 h-3 text-gray-400" />
+}
+
+function FormTypeBadge({ type }: { type: string }) {
+  if (type === 'LINE') {
+    return (
+      <span className="inline-block px-2 py-0.5 rounded text-xs border bg-orange-50 text-orange-700 border-orange-300">
+        LINE
+      </span>
+    )
+  }
+  if (type === 'inquiry') {
+    return (
+      <span className="inline-block px-2 py-0.5 rounded text-xs border bg-blue-50 text-blue-700 border-blue-300">
+        inquiry
+      </span>
+    )
+  }
+  return <span className="text-gray-400 text-xs">{type || '-'}</span>
 }
 
 function StatusBadge({ status }: { status: string }) {

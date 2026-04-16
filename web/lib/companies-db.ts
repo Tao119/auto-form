@@ -51,6 +51,19 @@ export interface CompanyFilters {
   area?: string
 }
 
+// ── URL classification helpers ─────────────────────────────────────
+const LINE_URL_PATTERNS = [
+  /^https?:\/\/(www\.)?lin\.ee\//i,
+  /^https?:\/\/(www\.)?page\.line\.me\//i,
+  /^https?:\/\/(www\.)?accountpage\.line\.me\//i,
+  /^https?:\/\/liff\.line\.me\//i,
+]
+
+export function isLineUrl(url: string): boolean {
+  if (!url) return false
+  return LINE_URL_PATTERNS.some(re => re.test(url))
+}
+
 // ── URL normalization ──────────────────────────────────────────────
 export function normalizeUrl(url: string): string {
   if (!url) return ''
@@ -100,6 +113,18 @@ function getDb(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_companies_runId            ON companies(runId);
     CREATE INDEX IF NOT EXISTS idx_companies_industry         ON companies(industry);
     CREATE INDEX IF NOT EXISTS idx_companies_area             ON companies(area);
+  `)
+  // Migration: fix formType for existing LINE URLs that were mis-classified as 'inquiry'
+  _db.exec(`
+    UPDATE companies
+    SET formType = 'LINE'
+    WHERE formType != 'LINE'
+      AND (
+        formUrl LIKE '%://lin.ee/%'
+        OR formUrl LIKE '%://page.line.me/%'
+        OR formUrl LIKE '%://accountpage.line.me/%'
+        OR formUrl LIKE '%://liff.line.me/%'
+      )
   `)
   return _db
 }
@@ -152,6 +177,10 @@ export function addCompanies(rows: CompanyInput[]): { added: number; duplicates:
         duplicates++
         continue
       }
+      // Override GPT stub classification for LINE messenger links
+      const resolvedFormType = row.formUrl && isLineUrl(row.formUrl)
+        ? 'LINE'
+        : (row.formType || '')
       insert.run({
         id: generateId(),
         name: row.name || '',
@@ -163,7 +192,7 @@ export function addCompanies(rows: CompanyInput[]): { added: number; duplicates:
         address: row.address || '',
         industry: row.industry || '',
         area: row.area || '',
-        formType: row.formType || '',
+        formType: resolvedFormType,
         status: row.status || '未送信',
         notes: row.notes || '',
         projectId: row.projectId || '',

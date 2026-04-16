@@ -31,6 +31,7 @@ export async function GET(req: NextRequest) {
   const filterIndustry = searchParams.get('industry') || ''
   const filterArea = searchParams.get('area') || ''
   const filterStatus = searchParams.get('status') || ''
+  const filterFormType = searchParams.get('formType') || ''
 
   try {
     const companies = getCompanies({
@@ -43,6 +44,7 @@ export async function GET(req: NextRequest) {
     if (filterIndustry) rows = rows.filter((r) => r['業種'].includes(filterIndustry))
     if (filterArea) rows = rows.filter((r) => r['エリア'].includes(filterArea))
     if (filterStatus) rows = rows.filter((r) => r['ステータス'] === filterStatus)
+    if (filterFormType) rows = rows.filter((r) => r['フォーム種別'] === filterFormType)
 
     const csv = await getSheetDataAsCSV(rows)
 
