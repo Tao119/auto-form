@@ -41,15 +41,18 @@ export async function POST(req: NextRequest) {
   }
 }
 
+const VALID_STATUSES = ['未送信', '送信済み', 'エラー', 'スキップ'] as const
+const StatusEnum = z.enum(VALID_STATUSES)
+
 const PatchSchema = z.union([
   // Single company: supports status and/or notes update
   z.object({
     id: z.string(),
-    status: z.string().optional(),
+    status: StatusEnum.optional(),
     notes: z.string().max(500).optional(),
   }).refine((d) => d.status !== undefined || d.notes !== undefined, { message: 'status or notes required' }),
   // Bulk status update (no notes support for batch)
-  z.object({ ids: z.array(z.string()).min(1), status: z.string() }),
+  z.object({ ids: z.array(z.string()).min(1).max(5000), status: StatusEnum }),
 ])
 
 // PATCH /api/companies
