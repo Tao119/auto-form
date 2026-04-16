@@ -43,6 +43,7 @@ interface FilterState {
 
 interface Meta {
   total: number
+  formCount: number
   page: number
   limit: number
   industries: string[]
@@ -76,7 +77,7 @@ export default function ProjectResultsPage() {
   const [project, setProject] = useState<ProjectDetail | null>(null)
   const [selectedRunId, setSelectedRunId] = useState<string>('')
   const [rows, setRows] = useState<CompanyRow[]>([])
-  const [meta, setMeta] = useState<Meta>({ total: 0, page: 1, limit: 100, industries: [], areas: [] })
+  const [meta, setMeta] = useState<Meta>({ total: 0, formCount: 0, page: 1, limit: 100, industries: [], areas: [] })
   const [filters, setFilters] = useState<FilterState>({ industry: '', area: '', status: '', formType: '', hasForm: '', search: '' })
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -198,6 +199,7 @@ export default function ProjectResultsPage() {
         setRows(data.data)
         setMeta({
           total: data.total ?? 0,
+          formCount: data.formCount ?? 0,
           page: data.page ?? p,
           limit: data.limit ?? 100,
           industries: data.industries ?? [],
@@ -558,7 +560,18 @@ export default function ProjectResultsPage() {
 
       {/* Count + batch actions */}
       <div className="flex items-center justify-between text-xs text-gray-500">
-        <span>{loading ? '読み込み中...' : `${meta.total.toLocaleString()}件`}</span>
+        <span>
+          {loading ? '読み込み中...' : (
+            <>
+              {meta.total.toLocaleString()}件
+              {meta.formCount > 0 && !filters.hasForm && (
+                <span className="ml-2 text-green-600">
+                  フォームあり: {meta.formCount.toLocaleString()}件 ({Math.round((meta.formCount / meta.total) * 100)}%)
+                </span>
+              )}
+            </>
+          )}
+        </span>
         <div className="flex items-center gap-2">
           {selectedIds.size > 0 && (
             <div className="flex items-center gap-1.5">

@@ -47,6 +47,7 @@ export async function GET(req: NextRequest) {
   try {
     // Count and paginate in SQLite — no full table scans in JS
     const total = countCompanies(baseFilters)
+    const formCount = countCompanies({ ...baseFilters, hasForm: 'true' })
     const offset = (page - 1) * limit
     const companies = getCompanies({ ...baseFilters, limit, offset, sortBy, sortDir })
     const data = companies.map(toRow)
@@ -54,7 +55,7 @@ export async function GET(req: NextRequest) {
     // Distinct values for dropdown filters (scoped to project, no other filters)
     const { industries, areas } = getDistinctValues(projectId)
 
-    return NextResponse.json({ success: true, data, total, page, limit, industries, areas })
+    return NextResponse.json({ success: true, data, total, formCount, page, limit, industries, areas })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     return NextResponse.json({ success: false, error: msg, data: [] as CompanyRow[] }, { status: 500 })
