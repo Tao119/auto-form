@@ -5,6 +5,10 @@ import * as zlib from 'zlib'
 import { URL } from 'url'
 import { z } from 'zod'
 
+// Allow at most 3 concurrent fetch-bulk jobs to prevent OOM when n8n fires multiple webhooks
+const MAX_CONCURRENT_FETCHES = 3
+let _activeFetches = 0
+
 const _httpAgent  = new http.Agent({ keepAlive: true, maxSockets: 64 })
 const _httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 64, rejectUnauthorized: false })
 
@@ -130,6 +134,13 @@ async function fetchBatch(urls: string[], timeoutMs: number, concurrency: number
 }
 
 export async function POST(req: NextRequest) {
+  if (_activeFetches >= MAX_CONCURRENT_FETCHES) {
+    return NextResponse.json(
+      { success: false, error: 'Server busy — too many concurrent fetch jobs. Retry in a few seconds.' },
+      { status: 429 }
+    )
+  }
+  _activeFetches++
   try {
     const body = Schema.parse(await req.json())
     const { urls, timeoutMs, concurrency } = body
@@ -154,5 +165,7 @@ export async function POST(req: NextRequest) {
     })
   } catch (e) {
     return NextResponse.json({ success: false, error: String(e) }, { status: 400 })
+  } finally {
+    _activeFetches--
   }
 }
