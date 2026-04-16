@@ -56,11 +56,22 @@ export async function POST(req: NextRequest) {
       }),
     }
 
-    // Register run in project
+    // Register run in project (include radius fields so retry can reproduce exact conditions)
     await addRunToProject(projectId, {
       id: runId,
       label,
-      searchTarget: { industry: execFields.industry, area: execFields.area, keywords, maxResults },
+      searchTarget: {
+        industry: execFields.industry,
+        area: execFields.area,
+        keywords,
+        maxResults,
+        ...(execFields.searchMode === 'radius' && {
+          searchMode: 'radius' as const,
+          lat: execFields.lat,
+          lng: execFields.lng,
+          radiusKm: execFields.radiusKm,
+        }),
+      },
     })
 
     // Enqueue (file-based)

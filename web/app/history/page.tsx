@@ -123,7 +123,14 @@ export default function HistoryPage() {
           industry: st?.industry ?? '',
           area: st?.area ?? '',
           keywords: st?.keywords ?? [],
-          maxResults: st?.maxResults ?? 50,  // use original run's maxResults
+          maxResults: st?.maxResults ?? 50,
+          // Preserve radius mode parameters if the original run used them
+          ...(st?.searchMode === 'radius' && {
+            searchMode: 'radius',
+            lat: st.lat,
+            lng: st.lng,
+            radiusKm: st.radiusKm,
+          }),
         }),
       })
       await load()

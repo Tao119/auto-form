@@ -21,6 +21,11 @@ export interface SearchTarget {
   area: string
   keywords: string[]
   maxResults: number
+  // Radius (map-based) mode fields — optional, only set when searchMode = 'radius'
+  searchMode?: 'prefecture' | 'radius'
+  lat?: number
+  lng?: number
+  radiusKm?: number
 }
 
 export interface SearchRun {
