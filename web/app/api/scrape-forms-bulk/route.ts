@@ -367,9 +367,12 @@ function extractForms(html: string, baseUrl: string): {
     const lText = rawText.toLowerCase()
     const lUrl = absoluteUrl.toLowerCase()
 
-    const isBooking = BOOKING_KW.some((kw) => lText.includes(kw.toLowerCase()) || lUrl.includes(kw.toLowerCase()))
-      || BOOKING_URL_HOSTS.some((h) => linkHost.includes(h))
-    if (isBooking) continue
+    // Reject booking links — but allow "予約・お問い合わせ" combined links
+    const isBookingHost = BOOKING_URL_HOSTS.some((h) => linkHost.includes(h))
+    const hasBookingKw = BOOKING_KW.some((kw) => lText.includes(kw.toLowerCase()) || lUrl.includes(kw.toLowerCase()))
+    const hasInquiryKw = CONTACT_TEXT_KW.slice(0, 10).some((kw) => lText.includes(kw.toLowerCase()))
+    // Host-based booking check is definitive; keyword-only check is rejected only if no inquiry keyword
+    if (isBookingHost || (hasBookingKw && !hasInquiryKw)) continue
 
     // Reject links whose URL path clearly indicates non-contact content.
     if (NON_CONTACT_SUFFIX_RE.test(lUrl)) continue
