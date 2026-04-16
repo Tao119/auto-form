@@ -167,7 +167,7 @@ function RunsSection() {
         body: JSON.stringify({ action: 'toggle', id }),
       })
       const d = await r.json()
-      if (d.success) setRuns(runs.map((run) => run.id === id ? { ...run, enabled: d.data.enabled } : run))
+      if (d.success) setRuns(runs.map((run) => run.id === id ? { ...run, enabled: d.enabled } : run))
     } catch (e) {
       setError(String(e))
     }
@@ -207,7 +207,7 @@ function RunsSection() {
       })
       const d = await r.json()
       if (d.success) {
-        setRuns([...runs, d.data])
+        setRuns([...runs, d.run])
         setShowAdd(false)
         setNewLabel('')
         setNewIndustry('')

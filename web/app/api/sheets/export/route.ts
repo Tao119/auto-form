@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getSheetDataAsCSV, COLUMNS } from '@/lib/sheets-client'
+import { COLUMNS } from '@/lib/sheets-client'
 import { getCompanies } from '@/lib/companies-db'
 import { getProject, getProjectRun } from '@/lib/project-manager'
 import type { CompanyRow } from '@/lib/types'
@@ -24,29 +24,39 @@ function toRow(c: Company): CompanyRow {
   }
 }
 
+function rowsToCsv(rows: CompanyRow[]): string {
+  const BOM = '\uFEFF'
+  const header = COLUMNS.join(',')
+  const body = rows.map((row) =>
+    COLUMNS.map((col) => {
+      const val = row[col as keyof CompanyRow] || ''
+      return `"${val.replace(/"/g, '""')}"`
+    }).join(',')
+  ).join('\n')
+  return BOM + header + '\n' + body
+}
+
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl
-  const projectId = searchParams.get('projectId') || ''
-  const runId = searchParams.get('runId') || ''
-  const filterIndustry = searchParams.get('industry') || ''
-  const filterArea = searchParams.get('area') || ''
-  const filterStatus = searchParams.get('status') || ''
-  const filterFormType = searchParams.get('formType') || ''
+  const projectId = searchParams.get('projectId') || undefined
+  const runId = searchParams.get('runId') || undefined
+
+  const filters = {
+    projectId,
+    runId,
+    industry: searchParams.get('industry') || undefined,
+    area:     searchParams.get('area') || undefined,
+    status:   searchParams.get('status') || undefined,
+    formType: searchParams.get('formType') || undefined,
+    search:   searchParams.get('search') || undefined,
+    hasForm:  searchParams.get('hasForm') || undefined,
+  }
 
   try {
-    const companies = getCompanies({
-      projectId: projectId || undefined,
-      runId: runId || undefined,
-    })
-
-    let rows: CompanyRow[] = companies.map(toRow)
-
-    if (filterIndustry) rows = rows.filter((r) => r['業種'].includes(filterIndustry))
-    if (filterArea) rows = rows.filter((r) => r['エリア'].includes(filterArea))
-    if (filterStatus) rows = rows.filter((r) => r['ステータス'] === filterStatus)
-    if (filterFormType) rows = rows.filter((r) => r['フォーム種別'] === filterFormType)
-
-    const csv = await getSheetDataAsCSV(rows)
+    // Push all filtering to SQLite, no limit for export
+    const companies = getCompanies(filters)
+    const rows = companies.map(toRow)
+    const csv = rowsToCsv(rows)
 
     let filename = '企業リスト'
     if (runId) {

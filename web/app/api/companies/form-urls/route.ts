@@ -17,12 +17,9 @@ export async function GET(req: NextRequest) {
       formUrls = Array.from(getFormUrls())
     }
 
-    return NextResponse.json({ formUrls })
-  } catch (error) {
-    console.error('GET /api/companies/form-urls error:', error)
-    return NextResponse.json(
-      { error: 'Failed to retrieve form URLs' },
-      { status: 500 }
-    )
+    return NextResponse.json({ success: true, formUrls })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    return NextResponse.json({ success: false, error: msg }, { status: 500 })
   }
 }

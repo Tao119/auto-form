@@ -8,6 +8,8 @@ import { ProjectCreateModal } from '@/components/modals/project-create-modal'
 
 interface ProjectWithMeta extends Project {
   runCount: number
+  companyCount?: number
+  formFoundCount?: number
 }
 
 export default function ResultsPage() {
@@ -131,7 +133,16 @@ export default function ResultsPage() {
                   )}
                   <div className="flex items-center gap-4 ml-6 text-xs text-gray-400">
                     <span>{proj.runCount}回の実行</span>
-                    <span>ID: {proj.id}</span>
+                    {proj.companyCount !== undefined && proj.companyCount > 0 && (
+                      <span className="text-gray-600">
+                        {proj.companyCount.toLocaleString()}社収集
+                        {proj.formFoundCount !== undefined && proj.formFoundCount > 0 && (
+                          <span className="ml-1 text-green-600">
+                            (フォーム {Math.round((proj.formFoundCount / proj.companyCount) * 100)}%)
+                          </span>
+                        )}
+                      </span>
+                    )}
                     <span>{new Date(proj.createdAt).toLocaleDateString('ja-JP')}</span>
                   </div>
                 </button>

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
-import { enqueue, markJobActive } from '@/lib/run-queue'
+import { enqueue, markJobActive, markJobDone } from '@/lib/run-queue'
 import { addRunToProject, getProject } from '@/lib/project-manager'
 import { triggerWorkflow } from '@/lib/n8n-client'
 import type { ExecuteParams } from '@/lib/types'
@@ -11,8 +11,14 @@ const Schema = z.object({
   label: z.string().min(1),
   industry: z.string().min(1),
   area: z.string().min(1),
+  areas: z.array(z.string()).optional(),            // multi-area single-session
   keywords: z.array(z.string()).optional(),
   maxResults: z.number().int().min(0).optional(),  // 0 = unlimited
+  // Radius (map-based) mode
+  searchMode: z.enum(['prefecture', 'radius']).optional(),
+  lat: z.number().optional(),
+  lng: z.number().optional(),
+  radiusKm: z.number().min(1).max(200).optional(),
 })
 
 /**
@@ -37,10 +43,17 @@ export async function POST(req: NextRequest) {
     const params: ExecuteParams = {
       industry: execFields.industry,
       area: execFields.area,
+      ...(execFields.areas && execFields.areas.length > 1 && { areas: execFields.areas }),
       keywords,
       maxResults,
       projectId,
       runId,
+      ...(execFields.searchMode === 'radius' && {
+        searchMode: 'radius',
+        lat: execFields.lat,
+        lng: execFields.lng,
+        radiusKm: execFields.radiusKm,
+      }),
     }
 
     // Register run in project
@@ -84,7 +97,8 @@ export async function POST(req: NextRequest) {
         executionId: result.executionId,
       })
     } catch (triggerErr) {
-      // Trigger failed - mark as error
+      // Trigger failed — mark queue job as failed so it doesn't block the queue
+      markJobDone(runId, 'failed', String(triggerErr))
       await fetch(
         `${process.env.INTERNAL_BASE_URL || 'http://localhost:3003'}/api/projects/runs/${runId}`,
         {

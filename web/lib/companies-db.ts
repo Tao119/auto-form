@@ -12,6 +12,7 @@ export interface Company {
   hpUrl: string
   formUrl: string
   normalizedFormUrl: string
+  normalizedHpUrl: string
   phone: string
   email: string
   address: string
@@ -49,6 +50,12 @@ export interface CompanyFilters {
   runId?: string
   industry?: string
   area?: string
+  status?: string
+  formType?: string
+  search?: string  // searches name, hpUrl, formUrl
+  hasForm?: string // 'true' = formUrl != '', 'false' = formUrl = ''
+  limit?: number
+  offset?: number
 }
 
 // ── URL classification helpers ─────────────────────────────────────
@@ -95,6 +102,7 @@ function getDb(): Database.Database {
       hpUrl             TEXT NOT NULL DEFAULT '',
       formUrl           TEXT NOT NULL DEFAULT '',
       normalizedFormUrl TEXT NOT NULL DEFAULT '',
+      normalizedHpUrl   TEXT NOT NULL DEFAULT '',
       phone             TEXT NOT NULL DEFAULT '',
       email             TEXT NOT NULL DEFAULT '',
       address           TEXT NOT NULL DEFAULT '',
@@ -109,10 +117,26 @@ function getDb(): Database.Database {
       importedFromSheets INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS idx_companies_normalizedFormUrl ON companies(normalizedFormUrl);
+    CREATE INDEX IF NOT EXISTS idx_companies_normalizedHpUrl   ON companies(normalizedHpUrl);
     CREATE INDEX IF NOT EXISTS idx_companies_projectId        ON companies(projectId);
     CREATE INDEX IF NOT EXISTS idx_companies_runId            ON companies(runId);
     CREATE INDEX IF NOT EXISTS idx_companies_industry         ON companies(industry);
     CREATE INDEX IF NOT EXISTS idx_companies_area             ON companies(area);
+  `)
+  // Migration: add normalizedHpUrl column for existing DBs (ignored if column already exists)
+  try { _db.exec(`ALTER TABLE companies ADD COLUMN normalizedHpUrl TEXT NOT NULL DEFAULT ''`) } catch {}
+  // Populate normalizedHpUrl for rows that still have the default ''
+  _db.exec(`
+    UPDATE companies
+    SET normalizedHpUrl = LOWER(RTRIM(
+      CASE
+        WHEN hpUrl LIKE 'https://www.%' THEN SUBSTR(hpUrl, 13)
+        WHEN hpUrl LIKE 'http://www.%'  THEN SUBSTR(hpUrl, 12)
+        WHEN hpUrl LIKE 'https://%'     THEN SUBSTR(hpUrl, 9)
+        WHEN hpUrl LIKE 'http://%'      THEN SUBSTR(hpUrl, 8)
+        ELSE hpUrl
+      END, '/'))
+    WHERE normalizedHpUrl = '' AND hpUrl != ''
   `)
   // Migration: fix formType for existing LINE URLs that were mis-classified as 'inquiry'
   _db.exec(`
@@ -138,15 +162,66 @@ function generateId(): string {
 export function getCompanies(filters?: CompanyFilters): Company[] {
   const db = getDb()
   const clauses: string[] = []
+  const params: Record<string, string | number> = {}
+
+  if (filters?.projectId) { clauses.push('projectId = @projectId'); params.projectId = filters.projectId }
+  if (filters?.runId)     { clauses.push('runId = @runId');         params.runId = filters.runId }
+  if (filters?.industry)  { clauses.push('industry = @industry');   params.industry = filters.industry }
+  if (filters?.area)      { clauses.push('area = @area');           params.area = filters.area }
+  if (filters?.status)    { clauses.push('status = @status');       params.status = filters.status }
+  if (filters?.formType)  { clauses.push('formType = @formType');   params.formType = filters.formType }
+  if (filters?.search) {
+    const q = `%${filters.search.toLowerCase()}%`
+    clauses.push('(LOWER(name) LIKE @search OR LOWER(hpUrl) LIKE @search OR LOWER(formUrl) LIKE @search)')
+    params.search = q
+  }
+  if (filters?.hasForm === 'true')  clauses.push("formUrl != ''")
+  if (filters?.hasForm === 'false') clauses.push("formUrl = ''")
+
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
+  const limitClause = filters?.limit !== undefined ? `LIMIT @limit OFFSET @offset` : ''
+  if (filters?.limit !== undefined) {
+    params.limit = filters.limit
+    params.offset = filters.offset ?? 0
+  }
+
+  return db.prepare(`SELECT * FROM companies ${where} ORDER BY collectedAt DESC ${limitClause}`).all(params) as Company[]
+}
+
+export function countCompanies(filters?: Omit<CompanyFilters, 'limit' | 'offset'>): number {
+  const db = getDb()
+  const clauses: string[] = []
   const params: Record<string, string> = {}
 
   if (filters?.projectId) { clauses.push('projectId = @projectId'); params.projectId = filters.projectId }
   if (filters?.runId)     { clauses.push('runId = @runId');         params.runId = filters.runId }
   if (filters?.industry)  { clauses.push('industry = @industry');   params.industry = filters.industry }
   if (filters?.area)      { clauses.push('area = @area');           params.area = filters.area }
+  if (filters?.status)    { clauses.push('status = @status');       params.status = filters.status }
+  if (filters?.formType)  { clauses.push('formType = @formType');   params.formType = filters.formType }
+  if (filters?.search) {
+    const q = `%${filters.search.toLowerCase()}%`
+    clauses.push('(LOWER(name) LIKE @search OR LOWER(hpUrl) LIKE @search OR LOWER(formUrl) LIKE @search)')
+    params.search = q
+  }
+  if (filters?.hasForm === 'true')  clauses.push("formUrl != ''")
+  if (filters?.hasForm === 'false') clauses.push("formUrl = ''")
 
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
-  return db.prepare(`SELECT * FROM companies ${where} ORDER BY collectedAt DESC`).all(params) as Company[]
+  const row = db.prepare(`SELECT COUNT(*) as cnt FROM companies ${where}`).get(params) as { cnt: number }
+  return row.cnt
+}
+
+/** Get distinct values for filter dropdowns, scoped to a project. */
+export function getDistinctValues(projectId?: string): { industries: string[]; areas: string[] } {
+  const db = getDb()
+  const where = projectId ? 'WHERE projectId = @projectId' : ''
+  const params = projectId ? { projectId } : {}
+  const industries = (db.prepare(`SELECT DISTINCT industry FROM companies ${where} ORDER BY industry`).all(params) as {industry: string}[])
+    .map(r => r.industry).filter(Boolean)
+  const areas = (db.prepare(`SELECT DISTINCT area FROM companies ${where} ORDER BY area`).all(params) as {area: string}[])
+    .map(r => r.area).filter(Boolean)
+  return { industries, areas }
 }
 
 export function getFormUrls(): Set<string> {
@@ -155,28 +230,45 @@ export function getFormUrls(): Set<string> {
   return new Set(rows.map(r => r.normalizedFormUrl))
 }
 
+/** Pre-load all normalized HP URLs for duplicate checking during batch inserts. */
+function getHpUrls(): Set<string> {
+  const db = getDb()
+  const rows = db.prepare("SELECT normalizedHpUrl FROM companies WHERE normalizedHpUrl != ''").all() as { normalizedHpUrl: string }[]
+  return new Set(rows.map(r => r.normalizedHpUrl))
+}
+
 export function addCompanies(rows: CompanyInput[]): { added: number; duplicates: number } {
   const db = getDb()
-  const existing = getFormUrls()
+  const existingFormUrls = getFormUrls()
+  const existingHpUrls = getHpUrls()
   let added = 0
   let duplicates = 0
 
   const insert = db.prepare(`
     INSERT INTO companies
-      (id, name, hpUrl, formUrl, normalizedFormUrl, phone, email, address,
+      (id, name, hpUrl, formUrl, normalizedFormUrl, normalizedHpUrl, phone, email, address,
        industry, area, formType, status, notes, projectId, runId, collectedAt, importedFromSheets)
     VALUES
-      (@id, @name, @hpUrl, @formUrl, @normalizedFormUrl, @phone, @email, @address,
+      (@id, @name, @hpUrl, @formUrl, @normalizedFormUrl, @normalizedHpUrl, @phone, @email, @address,
        @industry, @area, @formType, @status, @notes, @projectId, @runId, @collectedAt, @importedFromSheets)
   `)
 
   const addMany = db.transaction((rows: CompanyInput[]) => {
     for (const row of rows) {
-      const norm = normalizeUrl(row.formUrl || '')
-      if (norm && existing.has(norm)) {
+      const normForm = normalizeUrl(row.formUrl || '')
+      const normHp   = normalizeUrl(row.hpUrl || '')
+
+      // Dedup on form URL (primary — same form = same company)
+      if (normForm && existingFormUrls.has(normForm)) {
         duplicates++
         continue
       }
+      // Dedup on HP URL (secondary — same website = same company, even if no form)
+      if (normHp && existingHpUrls.has(normHp)) {
+        duplicates++
+        continue
+      }
+
       // Override GPT stub classification for LINE messenger links
       const resolvedFormType = row.formUrl && isLineUrl(row.formUrl)
         ? 'LINE'
@@ -186,7 +278,8 @@ export function addCompanies(rows: CompanyInput[]): { added: number; duplicates:
         name: row.name || '',
         hpUrl: row.hpUrl || '',
         formUrl: row.formUrl || '',
-        normalizedFormUrl: norm,
+        normalizedFormUrl: normForm,
+        normalizedHpUrl: normHp,
         phone: row.phone || '',
         email: row.email || '',
         address: row.address || '',
@@ -200,7 +293,8 @@ export function addCompanies(rows: CompanyInput[]): { added: number; duplicates:
         collectedAt: row.collectedAt || new Date().toISOString(),
         importedFromSheets: row.importedFromSheets ? 1 : 0,
       })
-      if (norm) existing.add(norm)
+      if (normForm) existingFormUrls.add(normForm)
+      if (normHp) existingHpUrls.add(normHp)
       added++
     }
   })
@@ -215,19 +309,9 @@ export function removeByRunId(runId: string): number {
   return result.changes
 }
 
+/** @deprecated Use countCompanies instead */
 export function getCompanyCount(filters?: CompanyFilters): number {
-  const db = getDb()
-  const clauses: string[] = []
-  const params: Record<string, string> = {}
-
-  if (filters?.projectId) { clauses.push('projectId = @projectId'); params.projectId = filters.projectId }
-  if (filters?.runId)     { clauses.push('runId = @runId');         params.runId = filters.runId }
-  if (filters?.industry)  { clauses.push('industry = @industry');   params.industry = filters.industry }
-  if (filters?.area)      { clauses.push('area = @area');           params.area = filters.area }
-
-  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
-  const row = db.prepare(`SELECT COUNT(*) as cnt FROM companies ${where}`).get(params) as { cnt: number }
-  return row.cnt
+  return countCompanies(filters)
 }
 
 // ── Google Sheets mapping ─────────────────────────────────────────

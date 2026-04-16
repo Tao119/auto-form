@@ -13,14 +13,10 @@ export async function GET(req: NextRequest) {
     const area = searchParams.get('area') ?? undefined
 
     const companies = getCompanies({ projectId, runId, industry, area })
-
-    return NextResponse.json({ companies, total: companies.length })
-  } catch (error) {
-    console.error('GET /api/companies error:', error)
-    return NextResponse.json(
-      { error: 'Failed to retrieve companies' },
-      { status: 500 }
-    )
+    return NextResponse.json({ success: true, companies, total: companies.length })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    return NextResponse.json({ success: false, error: msg }, { status: 500 })
   }
 }
 
@@ -33,20 +29,13 @@ export async function POST(req: NextRequest) {
     const { companies } = body as { companies: CompanyInput[] }
 
     if (!Array.isArray(companies)) {
-      return NextResponse.json(
-        { error: 'Request body must include companies array' },
-        { status: 400 }
-      )
+      return NextResponse.json({ success: false, error: 'companies array required' }, { status: 400 })
     }
 
     const { added, duplicates } = addCompanies(companies)
-
-    return NextResponse.json({ added, duplicates })
-  } catch (error) {
-    console.error('POST /api/companies error:', error)
-    return NextResponse.json(
-      { error: 'Failed to add companies' },
-      { status: 500 }
-    )
+    return NextResponse.json({ success: true, added, duplicates })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    return NextResponse.json({ success: false, error: msg }, { status: 500 })
   }
 }

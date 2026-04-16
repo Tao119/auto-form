@@ -81,13 +81,23 @@ export async function getSheetDataAsCSV(rows?: CompanyRow[]): Promise<string> {
   return BOM + header + '\n' + body
 }
 
-export async function getSheetStats(projectId?: string): Promise<{ total: number; byStatus: Record<string, number> }> {
+export async function getSheetStats(projectId?: string): Promise<{
+  total: number
+  formFoundCount: number
+  byStatus: Record<string, number>
+  byFormType: Record<string, number>
+}> {
   const { getCompanies } = await import('./companies-db')
   const companies = getCompanies(projectId ? { projectId } : undefined)
   const byStatus: Record<string, number> = {}
+  const byFormType: Record<string, number> = {}
+  let formFoundCount = 0
   for (const c of companies) {
     const s = c.status || '不明'
     byStatus[s] = (byStatus[s] || 0) + 1
+    const ft = c.formType || 'unknown'
+    byFormType[ft] = (byFormType[ft] || 0) + 1
+    if (c.formUrl) formFoundCount++
   }
-  return { total: companies.length, byStatus }
+  return { total: companies.length, formFoundCount, byStatus, byFormType }
 }

@@ -136,13 +136,21 @@ export interface N8nExecution {
   }
 }
 
+export type SearchMode = 'prefecture' | 'radius'
+
 export interface ExecuteParams {
   industry: string
   area: string
+  areas?: string[]   // multi-area single-session mode
   keywords?: string[]
   maxResults?: number
   projectId: string
   runId: string
+  // Radius (map-based) mode
+  searchMode?: SearchMode
+  lat?: number
+  lng?: number
+  radiusKm?: number
 }
 
 export interface ApiResponse<T> {

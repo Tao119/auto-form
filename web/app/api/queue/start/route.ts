@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { triggerWorkflow } from '@/lib/n8n-client'
 import { updateRunStatus } from '@/lib/project-manager'
+import { markJobDone } from '@/lib/run-queue'
 import type { ExecuteParams } from '@/lib/types'
 
 const Schema = z.object({
@@ -9,10 +10,15 @@ const Schema = z.object({
   params: z.object({
     industry: z.string(),
     area: z.string(),
+    areas: z.array(z.string()).optional(),
     keywords: z.array(z.string()).optional(),
     maxResults: z.number().optional(),
     projectId: z.string(),
     runId: z.string(),
+    searchMode: z.enum(['prefecture', 'radius']).optional(),
+    lat: z.number().optional(),
+    lng: z.number().optional(),
+    radiusKm: z.number().optional(),
   }),
 })
 
@@ -25,10 +31,16 @@ export async function POST(req: NextRequest) {
     const { runId, params } = Schema.parse(await req.json())
     const execParams = params as ExecuteParams
 
-    const result = await triggerWorkflow(execParams)
-    updateRunStatus(runId, 'running', result.executionId)
-
-    return NextResponse.json({ success: true, executionId: result.executionId })
+    try {
+      const result = await triggerWorkflow(execParams)
+      updateRunStatus(runId, 'running', result.executionId)
+      return NextResponse.json({ success: true, executionId: result.executionId })
+    } catch (triggerErr) {
+      // Trigger failed — mark both run and queue job as failed
+      updateRunStatus(runId, 'error')
+      markJobDone(runId, 'failed', String(triggerErr))
+      return NextResponse.json({ success: false, error: String(triggerErr) }, { status: 502 })
+    }
   } catch (e) {
     return NextResponse.json({ success: false, error: String(e) }, { status: 400 })
   }

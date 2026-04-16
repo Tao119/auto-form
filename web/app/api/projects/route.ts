@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getProjects, createProject, getRunsForProject } from '@/lib/project-manager'
+import { countCompanies } from '@/lib/companies-db'
 import { z } from 'zod'
 
 export async function GET() {
@@ -8,6 +9,8 @@ export async function GET() {
     const data = projects.map((p) => ({
       ...p,
       runCount: getRunsForProject(p.id).length,
+      companyCount: countCompanies({ projectId: p.id }),
+      formFoundCount: countCompanies({ projectId: p.id, hasForm: 'true' }),
     }))
     return NextResponse.json({ success: true, data })
   } catch (e) {

@@ -14,10 +14,12 @@ interface RunWithProject extends ProjectRun {
 
 function StatusBadge({ status }: { status: ProjectRun['status'] }) {
   const map: Record<string, { label: string; cls: string; icon: React.ReactNode }> = {
-    success: { label: '成功', cls: 'bg-green-50 text-green-700 border-green-300', icon: <CheckCircle2 className="w-3 h-3" /> },
-    error:   { label: 'エラー', cls: 'bg-red-50 text-red-700 border-red-300', icon: <XCircle className="w-3 h-3" /> },
-    running: { label: '実行中', cls: 'bg-blue-50 text-blue-700 border-blue-300', icon: <Clock className="w-3 h-3 animate-spin" /> },
-    pending: { label: '待機中', cls: 'bg-yellow-50 text-yellow-700 border-yellow-300', icon: <AlertCircle className="w-3 h-3" /> },
+    success:   { label: '成功', cls: 'bg-green-50 text-green-700 border-green-300', icon: <CheckCircle2 className="w-3 h-3" /> },
+    completed: { label: '完了', cls: 'bg-green-50 text-green-700 border-green-300', icon: <CheckCircle2 className="w-3 h-3" /> },
+    error:     { label: 'エラー', cls: 'bg-red-50 text-red-700 border-red-300', icon: <XCircle className="w-3 h-3" /> },
+    running:   { label: '実行中', cls: 'bg-blue-50 text-blue-700 border-blue-300', icon: <Clock className="w-3 h-3 animate-spin" /> },
+    pending:   { label: '待機中', cls: 'bg-yellow-50 text-yellow-700 border-yellow-300', icon: <AlertCircle className="w-3 h-3" /> },
+    canceled:  { label: 'キャンセル', cls: 'bg-gray-100 text-gray-600 border-gray-300', icon: <XCircle className="w-3 h-3" /> },
   }
   const s = map[status] ?? { label: status, cls: 'bg-gray-100 text-gray-600 border-gray-300', icon: null }
   return (
@@ -25,6 +27,17 @@ function StatusBadge({ status }: { status: ProjectRun['status'] }) {
       {s.icon} {s.label}
     </span>
   )
+}
+
+function formatDuration(createdAt: string, completedAt?: string): string {
+  if (!completedAt) return '-'
+  const ms = new Date(completedAt).getTime() - new Date(createdAt).getTime()
+  if (ms < 0) return '-'
+  const secs = Math.floor(ms / 1000)
+  const mins = Math.floor(secs / 60)
+  const hours = Math.floor(mins / 60)
+  if (hours > 0) return `${hours}時間${mins % 60}分`
+  return `${mins}分${secs % 60}秒`
 }
 
 function timeAgo(iso: string) {
@@ -51,12 +64,48 @@ export default function HistoryPage() {
       await fetch('/api/projects/runs/sync', { method: 'POST' }).catch(() => {})
       const res = await fetch('/api/projects/runs')
       const data = await res.json()
-      if (data.success) setRuns(data.data)
+      if (data.success) setRuns([...data.data].sort((a: RunWithProject, b: RunWithProject) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()))
       else setError(data.error || '取得失敗')
     } catch (e) {
       setError(String(e))
     } finally {
       setLoading(false)
+    }
+  }
+
+  const cancelRun = async (runId: string) => {
+    try {
+      await fetch(`/api/projects/runs/${runId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'error' }),
+      })
+      await load()
+    } catch {
+      // silently ignore
+    }
+  }
+
+  const retryRun = async (run: RunWithProject) => {
+    try {
+      const newRunId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+      const st = run.searchTarget
+      await fetch('/api/queue/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          runId: newRunId,
+          projectId: run.projectId,
+          label: run.label,
+          industry: st?.industry ?? '',
+          area: st?.area ?? '',
+          keywords: st?.keywords ?? [],
+          maxResults: 50,
+        }),
+      })
+      await load()
+    } catch {
+      // silently ignore
     }
   }
 
@@ -105,13 +154,14 @@ export default function HistoryPage() {
                 <th className="text-left px-4 py-3 text-xs text-gray-500 font-medium whitespace-nowrap">収集件数</th>
                 <th className="text-left px-4 py-3 text-xs text-gray-500 font-medium whitespace-nowrap">トークン / コスト</th>
                 <th className="text-left px-4 py-3 text-xs text-gray-500 font-medium whitespace-nowrap">開始日時</th>
+                <th className="text-left px-4 py-3 text-xs text-gray-500 font-medium whitespace-nowrap">実行時間</th>
                 <th className="text-left px-4 py-3 text-xs text-gray-500 font-medium whitespace-nowrap">結果</th>
               </tr>
             </thead>
             <tbody>
               {loading && runs.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-12 text-center text-gray-400">
+                  <td colSpan={8} className="px-4 py-12 text-center text-gray-400">
                     <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2" />
                     読み込み中...
                   </td>
@@ -119,7 +169,7 @@ export default function HistoryPage() {
               )}
               {!loading && runs.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-12 text-center text-gray-400">
+                  <td colSpan={8} className="px-4 py-12 text-center text-gray-400">
                     実行履歴がありません
                   </td>
                 </tr>
@@ -166,7 +216,25 @@ export default function HistoryPage() {
 
                   {/* Status */}
                   <td className="px-4 py-3">
-                    <StatusBadge status={run.status} />
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <StatusBadge status={run.status} />
+                      {run.status === 'running' && (
+                        <button
+                          onClick={() => cancelRun(run.id)}
+                          className="text-xs px-1.5 py-0.5 rounded border border-gray-300 text-gray-500 hover:text-red-600 hover:border-red-300 transition-colors"
+                        >
+                          キャンセル
+                        </button>
+                      )}
+                      {run.status === 'error' && (
+                        <button
+                          onClick={() => retryRun(run)}
+                          className="text-xs px-1.5 py-0.5 rounded border border-gray-300 text-gray-500 hover:text-blue-600 hover:border-blue-300 transition-colors"
+                        >
+                          再実行
+                        </button>
+                      )}
+                    </div>
                   </td>
 
                   {/* Items written */}
@@ -189,6 +257,22 @@ export default function HistoryPage() {
                             </span>
                           </div>
                         )}
+                        {(() => {
+                          const r = run as RunWithProject & { results?: { formFoundCount?: number; afterDedup?: number } }
+                          if (r.results?.formFoundCount !== undefined && r.results?.afterDedup !== undefined && r.results.afterDedup > 0) {
+                            const rate = (r.results.formFoundCount / r.results.afterDedup) * 100
+                            return (
+                              <div className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs border ${
+                                rate >= 50 ? 'bg-green-50 text-green-700 border-green-300' :
+                                rate >= 20 ? 'bg-yellow-50 text-yellow-700 border-yellow-300' :
+                                'bg-red-50 text-red-600 border-red-300'
+                              }`}>
+                                フォーム発見率: {rate.toFixed(1)}%
+                              </div>
+                            )
+                          }
+                          return null
+                        })()}
                       </div>
                     ) : (
                       <span className="text-gray-400 text-xs">
@@ -225,9 +309,14 @@ export default function HistoryPage() {
                     <div className="text-gray-400 text-xs mt-0.5">{timeAgo(run.createdAt)}</div>
                   </td>
 
+                  {/* Duration */}
+                  <td className="px-4 py-3 text-gray-600 text-xs whitespace-nowrap">
+                    {formatDuration(run.createdAt, run.completedAt)}
+                  </td>
+
                   {/* Link to results */}
                   <td className="px-4 py-3">
-                    {run.status === 'success' && run.itemsWritten && run.itemsWritten > 0 ? (
+                    {(run.status === 'success' || run.status === 'completed') && run.itemsWritten && run.itemsWritten > 0 ? (
                       <button
                         onClick={() => router.push(`/results/${run.projectId}`)}
                         className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 transition-colors"

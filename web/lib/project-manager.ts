@@ -14,7 +14,18 @@ function ensureFile(): void {
 
 function readData(): ProjectsData {
   ensureFile()
-  return JSON.parse(fs.readFileSync(PROJECTS_FILE, 'utf-8')) as ProjectsData
+  try {
+    const data = JSON.parse(fs.readFileSync(PROJECTS_FILE, 'utf-8')) as ProjectsData
+    if (!Array.isArray(data.projects) || !Array.isArray(data.runs)) {
+      throw new Error('invalid structure')
+    }
+    return data
+  } catch {
+    // Corrupted file — reinitialise (data loss is preferable to a crash loop)
+    const blank: ProjectsData = { projects: [], runs: [] }
+    writeData(blank)
+    return blank
+  }
 }
 
 function writeData(data: ProjectsData): void {
@@ -104,6 +115,25 @@ export interface RunStatusUpdate {
   completedAt?: string
   rawSearchCount?: number
   results?: import('./types').BenchmarkResults
+}
+
+/**
+ * Mark runs that have been in 'running' state for longer than maxAgeMs as 'error'.
+ * Called lazily from getQueueStatus to keep stale runs from blocking the UI.
+ */
+export function expireStaleRuns(maxAgeMs = 2 * 60 * 60 * 1000): number {
+  const data = readData()
+  const cutoff = new Date(Date.now() - maxAgeMs)
+  let count = 0
+  for (const run of data.runs) {
+    if (run.status === 'running' && new Date(run.createdAt) < cutoff) {
+      run.status = 'error'
+      if (!run.completedAt) run.completedAt = new Date().toISOString()
+      count++
+    }
+  }
+  if (count > 0) writeData(data)
+  return count
 }
 
 export function updateRunStatus(

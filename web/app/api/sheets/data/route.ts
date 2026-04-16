@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getCompanies } from '@/lib/companies-db'
+import { getCompanies, countCompanies, getDistinctValues } from '@/lib/companies-db'
 import type { Company } from '@/lib/companies-db'
 import type { CompanyRow } from '@/lib/types'
 
@@ -24,44 +24,31 @@ function toRow(c: Company): CompanyRow {
 
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl
-  const page = parseInt(searchParams.get('page') || '1', 10)
-  const limit = parseInt(searchParams.get('limit') || '100', 10)
-  const filterIndustry = searchParams.get('industry') || ''
-  const filterArea = searchParams.get('area') || ''
-  const filterStatus = searchParams.get('status') || ''
-  const filterFormType = searchParams.get('formType') || ''
-  const filterSearch = searchParams.get('search') || ''
-  const projectId = searchParams.get('projectId') || ''
-  const runId = searchParams.get('runId') || ''
+  const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10))
+  const limit = Math.min(500, Math.max(1, parseInt(searchParams.get('limit') || '100', 10)))
+  const projectId = searchParams.get('projectId') || undefined
+  const runId = searchParams.get('runId') || undefined
+
+  const baseFilters = {
+    projectId,
+    runId,
+    industry:  searchParams.get('industry') || undefined,
+    area:      searchParams.get('area') || undefined,
+    status:    searchParams.get('status') || undefined,
+    formType:  searchParams.get('formType') || undefined,
+    search:    searchParams.get('search') || undefined,
+    hasForm:   searchParams.get('hasForm') || undefined,
+  }
 
   try {
-    const companies = getCompanies({
-      projectId: projectId || undefined,
-      runId: runId || undefined,
-    })
+    // Count and paginate in SQLite — no full table scans in JS
+    const total = countCompanies(baseFilters)
+    const offset = (page - 1) * limit
+    const companies = getCompanies({ ...baseFilters, limit, offset })
+    const data = companies.map(toRow)
 
-    let rows: CompanyRow[] = companies.map(toRow)
-
-    if (filterIndustry) rows = rows.filter((r) => r['業種'].includes(filterIndustry))
-    if (filterArea) rows = rows.filter((r) => r['エリア'].includes(filterArea))
-    if (filterStatus) rows = rows.filter((r) => r['ステータス'] === filterStatus)
-    if (filterFormType) rows = rows.filter((r) => r['フォーム種別'] === filterFormType)
-    if (filterSearch) {
-      const q = filterSearch.toLowerCase()
-      rows = rows.filter((r) =>
-        r['会社名'].toLowerCase().includes(q) ||
-        r['HP URL'].toLowerCase().includes(q) ||
-        r['フォームURL'].toLowerCase().includes(q)
-      )
-    }
-
-    const total = rows.length
-    const start = (page - 1) * limit
-    const data = rows.slice(start, start + limit)
-
-    const allForFilters = getCompanies({ projectId: projectId || undefined }).map(toRow)
-    const industries = [...new Set(allForFilters.map((r) => r['業種']).filter(Boolean))].sort()
-    const areas = [...new Set(allForFilters.map((r) => r['エリア']).filter(Boolean))].sort()
+    // Distinct values for dropdown filters (scoped to project, no other filters)
+    const { industries, areas } = getDistinctValues(projectId)
 
     return NextResponse.json({ success: true, data, total, page, limit, industries, areas })
   } catch (e) {

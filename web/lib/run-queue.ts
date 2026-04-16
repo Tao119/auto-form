@@ -1,22 +1,55 @@
 import fs from 'fs'
 import path from 'path'
 import type { QueueJob, QueueData, ExecuteParams } from './types'
+import { updateRunStatus, expireStaleRuns } from './project-manager'
 
 const DATA_DIR = path.join(process.cwd(), 'data')
 const QUEUE_FILE = path.join(DATA_DIR, 'queue.json')
 
 export const MAX_CONCURRENT = parseInt(process.env.MAX_CONCURRENT_RUNS || '3', 10)
 
+// ─── Startup recovery ─────────────────────────────────────────
+// Run once per process to reset any jobs that were 'active' when the server
+// last stopped (they will never receive their completion callback).
+let _startupRecoveryDone = false
+
+function recoverStaleActiveJobs(data: QueueData): void {
+  const stale = data.jobs.filter((j) => j.status === 'active')
+  if (stale.length === 0) return
+
+  for (const job of stale) {
+    job.status = 'failed'
+    job.completedAt = new Date().toISOString()
+    job.error = 'server_restart'
+    updateRunStatus(job.runId, 'error')
+  }
+}
+
 // ─── File I/O ─────────────────────────────────────────────────
 
 function readQueue(): QueueData {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true })
+  const blank: QueueData = { jobs: [], maxConcurrent: MAX_CONCURRENT }
   if (!fs.existsSync(QUEUE_FILE)) {
-    const init: QueueData = { jobs: [], maxConcurrent: MAX_CONCURRENT }
-    fs.writeFileSync(QUEUE_FILE, JSON.stringify(init, null, 2))
-    return init
+    fs.writeFileSync(QUEUE_FILE, JSON.stringify(blank, null, 2))
+    _startupRecoveryDone = true
+    return blank
   }
-  return JSON.parse(fs.readFileSync(QUEUE_FILE, 'utf-8')) as QueueData
+  let data: QueueData
+  try {
+    data = JSON.parse(fs.readFileSync(QUEUE_FILE, 'utf-8')) as QueueData
+    // Sanity check
+    if (!Array.isArray(data.jobs)) data = blank
+  } catch {
+    // Corrupted file — reset to blank (stale recovery runs next time)
+    data = blank
+  }
+  if (!_startupRecoveryDone) {
+    _startupRecoveryDone = true
+    recoverStaleActiveJobs(data)
+    writeQueue(data)
+  }
+  return data
 }
 
 function writeQueue(data: QueueData): void {
@@ -97,13 +130,14 @@ export function markJobDone(runId: string, status: 'completed' | 'failed', error
   return next
 }
 
-/** Get full queue status. */
+/** Get full queue status. Also expires stale project runs (> 2 h in 'running'). */
 export function getQueueStatus(): {
   active: number
   waiting: number
   maxConcurrent: number
   recentJobs: QueueJob[]
 } {
+  expireStaleRuns()
   const data = readQueue()
   const active = data.jobs.filter((j) => j.status === 'active').length
   const waiting = data.jobs.filter((j) => j.status === 'waiting').length

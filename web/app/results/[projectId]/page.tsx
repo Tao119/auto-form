@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import {
   ArrowLeft, Download, Search, RefreshCw, X,
@@ -9,13 +9,20 @@ import {
 import type { CompanyRow, Project, ProjectRun } from '@/lib/types'
 
 const STATUS_OPTIONS = ['全て', '未送信', '送信済み', 'エラー', 'スキップ']
-const FORM_TYPE_OPTIONS = ['全て', 'inquiry', 'LINE', 'unknown']
+const FORM_TYPE_OPTIONS: Array<{ label: string; value: string }> = [
+  { label: '種別: 全て', value: '' },
+  { label: '問い合わせ', value: 'inquiry' },
+  { label: '予約', value: 'booking' },
+  { label: 'LINE', value: 'LINE' },
+  { label: '不明', value: 'unknown' },
+]
 
 interface FilterState {
   industry: string
   area: string
   status: string
   formType: string
+  hasForm: string
   search: string
 }
 
@@ -39,12 +46,29 @@ export default function ProjectResultsPage() {
   const [selectedRunId, setSelectedRunId] = useState<string>('')
   const [rows, setRows] = useState<CompanyRow[]>([])
   const [meta, setMeta] = useState<Meta>({ total: 0, page: 1, limit: 100, industries: [], areas: [] })
-  const [filters, setFilters] = useState<FilterState>({ industry: '', area: '', status: '', formType: '', search: '' })
+  const [filters, setFilters] = useState<FilterState>({ industry: '', area: '', status: '', formType: '', hasForm: '', search: '' })
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [loading, setLoading] = useState(false)
   const [projLoading, setProjLoading] = useState(true)
   const [error, setError] = useState('')
   const [page, setPage] = useState(1)
   const [exporting, setExporting] = useState(false)
+
+  // Debounce search input to avoid hammering the API on every keystroke
+  useEffect(() => {
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
+    searchDebounceRef.current = setTimeout(() => setDebouncedSearch(filters.search), 350)
+    return () => { if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current) }
+  }, [filters.search])
+
+  const refreshProject = useCallback(() => {
+    if (!projectId) return
+    fetch(`/api/projects/${projectId}`)
+      .then((r) => r.json())
+      .then((d) => { if (d.success) setProject(d.data) })
+      .catch(() => {})
+  }, [projectId])
 
   useEffect(() => {
     if (!projectId) return
@@ -59,6 +83,7 @@ export default function ProjectResultsPage() {
       .finally(() => setProjLoading(false))
   }, [projectId])
 
+
   const fetchData = useCallback(async (p = 1) => {
     if (!projectId) return
     setLoading(true)
@@ -71,7 +96,8 @@ export default function ProjectResultsPage() {
       if (filters.area) params.set('area', filters.area)
       if (filters.status) params.set('status', filters.status)
       if (filters.formType) params.set('formType', filters.formType)
-      if (filters.search) params.set('search', filters.search)
+      if (filters.hasForm) params.set('hasForm', filters.hasForm)
+      if (debouncedSearch) params.set('search', debouncedSearch)
       const res = await fetch(`/api/sheets/data?${params}`)
       const data = await res.json()
       if (data.success) {
@@ -92,9 +118,21 @@ export default function ProjectResultsPage() {
     } finally {
       setLoading(false)
     }
-  }, [projectId, selectedRunId, filters])
+  }, [projectId, selectedRunId, filters.industry, filters.area, filters.status, filters.formType, filters.hasForm, debouncedSearch])
 
   useEffect(() => { fetchData(1) }, [fetchData])
+
+  // Auto-refresh data while any run in this project is active
+  useEffect(() => {
+    if (!project) return
+    const hasActiveRun = project.runs.some((r) => r.status === 'running' || r.status === 'pending')
+    if (!hasActiveRun) return
+    const t = setInterval(() => {
+      refreshProject()
+      fetchData(page)
+    }, 8000)
+    return () => clearInterval(t)
+  }, [project, page, refreshProject, fetchData])
 
   const handleExport = async () => {
     setExporting(true)
@@ -106,13 +144,18 @@ export default function ProjectResultsPage() {
       if (filters.area) params.set('area', filters.area)
       if (filters.status) params.set('status', filters.status)
       if (filters.formType) params.set('formType', filters.formType)
+      if (filters.hasForm) params.set('hasForm', filters.hasForm)
+      if (filters.search) params.set('search', filters.search)
       const res = await fetch(`/api/sheets/export?${params}`)
       if (!res.ok) throw new Error('エクスポート失敗')
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `企業リスト_${new Date().toISOString().slice(0, 10)}.csv`
+      // Use server-provided filename from Content-Disposition if available
+      const cd = res.headers.get('Content-Disposition') ?? ''
+      const fnMatch = cd.match(/filename\*?=(?:UTF-8'')?([^;\s]+)/)
+      a.download = fnMatch ? decodeURIComponent(fnMatch[1]) : `企業リスト_${new Date().toISOString().slice(0, 10)}.csv`
       a.click()
       URL.revokeObjectURL(url)
     } catch (e) {
@@ -122,8 +165,8 @@ export default function ProjectResultsPage() {
     }
   }
 
-  const clearFilters = () => setFilters({ industry: '', area: '', status: '', formType: '', search: '' })
-  const hasFilters = filters.industry || filters.area || filters.status || filters.formType || filters.search
+  const clearFilters = () => setFilters({ industry: '', area: '', status: '', formType: '', hasForm: '', search: '' })
+  const hasFilters = filters.industry || filters.area || filters.status || filters.formType || filters.hasForm || filters.search
 
   if (projLoading) {
     return (
@@ -160,6 +203,11 @@ export default function ProjectResultsPage() {
           <div className="flex items-center gap-2">
             <FolderOpen className="w-4 h-4 text-gray-400" />
             <h1 className="text-lg font-semibold text-gray-900">{project.name}</h1>
+            {project.runs.some((r) => r.status === 'running') && (
+              <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded border bg-blue-50 text-blue-700 border-blue-200">
+                <RefreshCw className="w-2.5 h-2.5 animate-spin" /> 収集中
+              </span>
+            )}
           </div>
           {project.description && (
             <p className="text-sm text-gray-500 mt-0.5 ml-6">{project.description}</p>
@@ -225,7 +273,7 @@ export default function ProjectResultsPage() {
 
       {/* Filters */}
       <div className="bg-white rounded border border-gray-200 p-3 shadow-sm">
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
           <div className="md:col-span-1 relative">
             <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-gray-400" />
             <input
@@ -258,22 +306,29 @@ export default function ProjectResultsPage() {
             className="bg-white border border-gray-300 rounded px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none"
           >
             {FORM_TYPE_OPTIONS.map((t) => (
-              <option key={t} value={t === '全て' ? '' : t}>
-                {t === '全て' ? '種別: 全て' : t}
+              <option key={t.value} value={t.value}>{t.label}</option>
+            ))}
+          </select>
+          <select
+            value={filters.status}
+            onChange={(e) => setFilters({ ...filters, status: e.target.value })}
+            className="bg-white border border-gray-300 rounded px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none"
+          >
+            {STATUS_OPTIONS.map((s) => (
+              <option key={s} value={s === '全て' ? '' : s}>
+                {s === '全て' ? 'ステータス: 全て' : s}
               </option>
             ))}
           </select>
           <div className="flex gap-2">
             <select
-              value={filters.status}
-              onChange={(e) => setFilters({ ...filters, status: e.target.value })}
+              value={filters.hasForm}
+              onChange={(e) => setFilters({ ...filters, hasForm: e.target.value })}
               className="flex-1 bg-white border border-gray-300 rounded px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none"
             >
-              {STATUS_OPTIONS.map((s) => (
-                <option key={s} value={s === '全て' ? '' : s}>
-                  {s === '全て' ? 'ステータス: 全て' : s}
-                </option>
-              ))}
+              <option value="">フォーム: 全て</option>
+              <option value="true">フォームあり</option>
+              <option value="false">フォームなし</option>
             </select>
             {hasFilters && (
               <button
@@ -361,12 +416,16 @@ export default function ProjectResultsPage() {
                           className={`truncate block text-xs ${
                             row['フォーム種別'] === 'LINE'
                               ? 'text-orange-600 hover:text-orange-800'
+                              : row['フォーム種別'] === 'booking'
+                              ? 'text-purple-600 hover:text-purple-800'
                               : 'text-green-700 hover:text-green-900'
                           }`}
                           title={row['フォームURL']}>
                           {row['フォームURL'].replace(/^https?:\/\//, '').slice(0, 35)}
                         </a>
-                      ) : <span className="text-gray-400">-</span>}
+                      ) : (
+                        <span className="text-xs text-amber-500 italic">未検出</span>
+                      )}
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap text-xs">
                       <FormTypeBadge type={row['フォーム種別']} />
@@ -417,7 +476,7 @@ export default function ProjectResultsPage() {
 }
 
 function RunStatusDot({ status }: { status: ProjectRun['status'] }) {
-  if (status === 'success') return <CheckCircle className="w-3 h-3 text-green-600" />
+  if (status === 'success' || status === 'completed') return <CheckCircle className="w-3 h-3 text-green-600" />
   if (status === 'error') return <XCircle className="w-3 h-3 text-red-500" />
   if (status === 'running') return <Play className="w-3 h-3 text-blue-500" />
   return <Clock className="w-3 h-3 text-gray-400" />
@@ -434,7 +493,14 @@ function FormTypeBadge({ type }: { type: string }) {
   if (type === 'inquiry') {
     return (
       <span className="inline-block px-2 py-0.5 rounded text-xs border bg-blue-50 text-blue-700 border-blue-300">
-        inquiry
+        問い合わせ
+      </span>
+    )
+  }
+  if (type === 'booking') {
+    return (
+      <span className="inline-block px-2 py-0.5 rounded text-xs border bg-purple-50 text-purple-700 border-purple-300">
+        予約
       </span>
     )
   }

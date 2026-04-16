@@ -1,9 +1,13 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Play, Loader2, CheckCircle2, XCircle, ChevronDown, Plus, FolderOpen, Database, X } from 'lucide-react'
-import type { Preset, Project } from '@/lib/types'
+import dynamic from 'next/dynamic'
+import { Play, Loader2, CheckCircle2, XCircle, ChevronDown, Plus, FolderOpen, Database, X, Map, List, Hash } from 'lucide-react'
+import type { Preset, Project, SearchMode } from '@/lib/types'
 import { ProjectCreateModal } from '@/components/modals/project-create-modal'
+import type { MapPickerValue } from './map-picker'
+
+const MapPicker = dynamic(() => import('./map-picker'), { ssr: false })
 
 const INDUSTRIES = ['美容室', 'ヘアサロン', 'エステサロン', '美容クリニック', '歯科医院', '整骨院', '中古車販売', 'その他']
 
@@ -37,16 +41,31 @@ interface BatchProgress {
   error: number
 }
 
+const MAX_RESULTS_OPTIONS = [
+  { label: '50件', value: 50 },
+  { label: '100件', value: 100 },
+  { label: '200件', value: 200 },
+  { label: '500件', value: 500 },
+  { label: '無制限', value: 0 },
+]
+
+const SEARCH_MODE_LABELS: Record<SearchMode, string> = {
+  prefecture: '都道府県',
+  radius: '地図指定',
+}
+
 function generateRunId() {
   return `run-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
 }
 
 export default function ExecutePanel() {
+  const [searchMode, setSearchMode] = useState<SearchMode>('prefecture')
   const [industry, setIndustry] = useState('美容室')
   const [customIndustry, setCustomIndustry] = useState('')
   const [selectedAreas, setSelectedAreas] = useState<string[]>(['東京都'])
   const [areaDropdownOpen, setAreaDropdownOpen] = useState(false)
   const areaDropdownRef = useRef<HTMLDivElement>(null)
+  const [mapValue, setMapValue] = useState<MapPickerValue | null>(null)
 
   const [status, setStatus] = useState<Status>('idle')
   const [log, setLog] = useState('')
@@ -54,14 +73,20 @@ export default function ExecutePanel() {
   const [showPresets, setShowPresets] = useState(false)
   const [itemsWritten, setItemsWritten] = useState(0)
   const [liveCount, setLiveCount] = useState(0)
+  const [queuePosition, setQueuePosition] = useState(0)
   const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null)
+  const [maxResults, setMaxResults] = useState(50)
 
   const [projects, setProjects] = useState<Project[]>([])
   const [selectedProjectId, setSelectedProjectId] = useState<string>('')
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [queueStats, setQueueStats] = useState<{ active: number; waiting: number; maxConcurrent: number } | null>(null)
 
   const actualIndustry = industry === 'その他' ? customIndustry : industry
   const isRunning = status === 'running' || status === 'queued'
+  const canExecute = !isRunning && !!actualIndustry && !!selectedProjectId &&
+    (searchMode !== 'prefecture' || selectedAreas.length > 0) &&
+    (searchMode !== 'radius' || !!mapValue)
 
   // Close area dropdown on outside click
   useEffect(() => {
@@ -73,6 +98,18 @@ export default function ExecutePanel() {
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [])
+
+  // Keyboard shortcut: Ctrl+Enter / Cmd+Enter to execute
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && canExecute) {
+        e.preventDefault()
+        handleExecute()
+      }
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [canExecute]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     fetch('/api/config/presets').then((r) => r.json()).then((d) => {
@@ -87,6 +124,19 @@ export default function ExecutePanel() {
         }
       }
     }).catch(() => {})
+
+    const refreshQueue = () => {
+      fetch('/api/queue').then(r => r.json()).then(d => {
+        if (d.success) setQueueStats({
+          active: d.data.active,
+          waiting: d.data.waiting,
+          maxConcurrent: d.data.maxConcurrent,
+        })
+      }).catch(() => {})
+    }
+    refreshQueue()
+    const t = setInterval(refreshQueue, 8000)
+    return () => clearInterval(t)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleArea = (a: string) => {
@@ -105,19 +155,35 @@ export default function ExecutePanel() {
     }
   }
 
-  // Poll a single run and return its final status
+  // Poll a single run and return its final status; updates live counters along the way
   const pollSingleRun = useCallback((runId: string): Promise<'success' | 'error'> => {
     return new Promise((resolve) => {
       const interval = setInterval(async () => {
         try {
-          await fetch('/api/projects/runs/sync', { method: 'POST' }).catch(() => {})
           const res = await fetch(`/api/projects/runs/${runId}`)
           const data = await res.json()
           const run = data.data
           if (!run) return
-          if (run.status === 'success' || run.status === 'error') {
+
+          // Update live counter whenever itemsWritten changes
+          if (run.itemsWritten !== undefined && run.itemsWritten > 0) {
+            setLiveCount(run.itemsWritten)
+          }
+          // Update queue position
+          if (run.queuePosition !== undefined) {
+            setQueuePosition(run.queuePosition)
+            if (run.queuePosition > 0) setStatus('queued')
+          } else {
+            setQueuePosition(0)
+          }
+
+          if (run.status === 'success' || run.status === 'completed') {
             clearInterval(interval)
-            resolve(run.status)
+            setItemsWritten(run.itemsWritten ?? 0)
+            resolve('success')
+          } else if (run.status === 'error') {
+            clearInterval(interval)
+            resolve('error')
           }
         } catch {
           // continue polling
@@ -127,21 +193,26 @@ export default function ExecutePanel() {
   }, [])
 
   const handleExecute = async () => {
-    if (!actualIndustry || !selectedProjectId || selectedAreas.length === 0) return
+    if (!actualIndustry || !selectedProjectId) return
+    if (searchMode === 'prefecture' && selectedAreas.length === 0) return
+    if (searchMode === 'radius' && !mapValue) return
+
     setStatus('running')
-    setLog(`${selectedAreas.length} エリアをキューに追加中...`)
     setItemsWritten(0)
     setLiveCount(0)
     setBatchProgress(null)
 
     const keywords = KEYWORDS_MAP[actualIndustry] || [actualIndustry]
     const runIds: string[] = []
+    const timestamp = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }).slice(0, 16)
 
-    // Enqueue one job per area
-    for (const areaValue of selectedAreas) {
+    if (searchMode === 'radius' && mapValue) {
+      // Single job for map-based radius search
+      setLog('地図指定エリアをキューに追加中...')
       const runId = generateRunId()
       runIds.push(runId)
-      const runLabel = `${actualIndustry} / ${areaValue} ${new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }).slice(0, 16)}`
+      const areaLabel = mapValue.label || `${mapValue.lat.toFixed(3)},${mapValue.lng.toFixed(3)}`
+      const runLabel = `${actualIndustry} / ${areaLabel} 半径${mapValue.radiusKm}km ${timestamp}`
 
       try {
         const res = await fetch('/api/queue/execute', {
@@ -152,16 +223,54 @@ export default function ExecutePanel() {
             projectId: selectedProjectId,
             label: runLabel,
             industry: actualIndustry,
-            area: areaValue,
+            area: areaLabel,
             keywords,
+            maxResults,
+            searchMode: 'radius',
+            lat: mapValue.lat,
+            lng: mapValue.lng,
+            radiusKm: mapValue.radiusKm,
           }),
         })
         const data = await res.json()
         if (!data.success) {
-          console.error(`エリア ${areaValue} のキュー追加失敗:`, data.error)
+          setLog(`キュー追加失敗: ${data.error}`)
         }
       } catch (e) {
-        console.error(`エリア ${areaValue} のキュー追加エラー:`, e)
+        setLog(`エラー: ${String(e)}`)
+      }
+    } else {
+      // Prefecture mode: single job covering all selected areas
+      const runId = generateRunId()
+      runIds.push(runId)
+      const areaLabel = selectedAreas.length === 1
+        ? selectedAreas[0]
+        : `${selectedAreas.slice(0, 2).join('・')}${selectedAreas.length > 2 ? ` 他${selectedAreas.length - 2}件` : ''}`
+      const runLabel = `${actualIndustry} / ${areaLabel} ${timestamp}`
+
+      setLog(`${selectedAreas.length > 1 ? `${selectedAreas.length} エリア（1セッション）` : selectedAreas[0]} をキューに追加中...`)
+
+      try {
+        const res = await fetch('/api/queue/execute', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            runId,
+            projectId: selectedProjectId,
+            label: runLabel,
+            industry: actualIndustry,
+            area: areaLabel,
+            areas: selectedAreas,
+            keywords,
+            maxResults,
+          }),
+        })
+        const data = await res.json()
+        if (!data.success) {
+          setLog(`キュー追加失敗: ${data.error}`)
+        }
+      } catch (e) {
+        setLog(`エラー: ${String(e)}`)
       }
     }
 
@@ -234,7 +343,19 @@ export default function ExecutePanel() {
     <div className="bg-white rounded border border-gray-200 shadow-sm p-5 space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-gray-800">リスト収集を実行</h2>
+        <div className="flex items-center gap-3">
+          <h2 className="text-sm font-semibold text-gray-800">リスト収集を実行</h2>
+          {queueStats !== null && (
+            <span className={`text-xs px-2 py-0.5 rounded border ${
+              queueStats.active > 0
+                ? 'bg-blue-50 text-blue-600 border-blue-200'
+                : 'bg-gray-50 text-gray-400 border-gray-200'
+            }`}>
+              {queueStats.active}/{queueStats.maxConcurrent} 実行中
+              {queueStats.waiting > 0 && ` · ${queueStats.waiting} 待機`}
+            </span>
+          )}
+        </div>
         <div className="relative">
           <button
             onClick={() => setShowPresets(!showPresets)}
@@ -300,8 +421,27 @@ export default function ExecutePanel() {
         )}
       </div>
 
+      {/* Search mode toggle */}
+      <div className="flex items-center gap-1 bg-gray-100 rounded p-0.5 w-fit">
+        {(['prefecture', 'radius'] as SearchMode[]).map((mode) => (
+          <button
+            key={mode}
+            onClick={() => { if (!isRunning) setSearchMode(mode) }}
+            disabled={isRunning}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors ${
+              searchMode === mode
+                ? 'bg-white text-gray-900 shadow-sm'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            {mode === 'prefecture' ? <List className="w-3.5 h-3.5" /> : <Map className="w-3.5 h-3.5" />}
+            {SEARCH_MODE_LABELS[mode]}
+          </button>
+        ))}
+      </div>
+
       {/* Search params */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div className={`grid gap-3 ${searchMode === 'prefecture' ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'}`}>
         {/* Industry */}
         <div>
           <label className="block text-xs text-gray-500 mb-1">業種</label>
@@ -324,7 +464,20 @@ export default function ExecutePanel() {
           )}
         </div>
 
-        {/* Area multi-select */}
+        {/* Map mode */}
+        {searchMode === 'radius' && (
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">調査エリア（地図で指定）</label>
+            <MapPicker
+              value={mapValue}
+              onChange={setMapValue}
+              disabled={isRunning}
+            />
+          </div>
+        )}
+
+        {/* Prefecture multi-select */}
+        {searchMode === 'prefecture' && (
         <div ref={areaDropdownRef}>
           <div className="flex items-center justify-between mb-1">
             <label className="text-xs text-gray-500">エリア</label>
@@ -443,18 +596,37 @@ export default function ExecutePanel() {
             </div>
           )}
         </div>
+        )}
       </div>
 
-      {/* Execute */}
+      {/* MaxResults + Execute */}
       <div className="space-y-2">
         <div className="flex items-center gap-3">
+          {/* Max results selector */}
+          <div className="flex items-center gap-1.5">
+            <Hash className="w-3.5 h-3.5 text-gray-400" />
+            <select
+              value={maxResults}
+              onChange={(e) => setMaxResults(Number(e.target.value))}
+              disabled={isRunning}
+              className="bg-white border border-gray-300 rounded px-2 py-1.5 text-xs text-gray-700 focus:border-blue-500 focus:outline-none disabled:opacity-50"
+            >
+              {MAX_RESULTS_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+
           <button
             onClick={handleExecute}
-            disabled={isRunning || !actualIndustry || !selectedProjectId || selectedAreas.length === 0}
+            disabled={!canExecute}
             className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-medium px-5 py-2 rounded transition-colors text-sm"
+            title="Ctrl+Enter / ⌘+Enter"
           >
             {isRunning ? (
-              <><Loader2 className="w-4 h-4 animate-spin" /> 実行中...</>
+              <><Loader2 className="w-4 h-4 animate-spin" /> {status === 'queued' ? '待機中...' : '実行中...'}</>
+            ) : searchMode === 'radius' ? (
+              <><Play className="w-4 h-4" /> 実行開始</>
             ) : (
               <><Play className="w-4 h-4" />
                 {selectedAreas.length > 1
@@ -476,6 +648,16 @@ export default function ExecutePanel() {
             </div>
           )}
         </div>
+
+        {/* Queue position indicator */}
+        {status === 'queued' && queuePosition > 0 && (
+          <div className="flex items-center gap-2 bg-yellow-50 border border-yellow-200 rounded px-3 py-2">
+            <Loader2 className="w-3.5 h-3.5 text-yellow-600 animate-spin flex-shrink-0" />
+            <span className="text-yellow-700 text-xs font-medium">
+              キュー待機中 — {queuePosition}番目
+            </span>
+          </div>
+        )}
 
         {/* Batch progress */}
         {batchProgress && (
@@ -505,7 +687,7 @@ export default function ExecutePanel() {
         )}
 
         {/* Live counter */}
-        {isRunning && liveCount > 0 && (
+        {status === 'running' && liveCount > 0 && (
           <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded px-3 py-2">
             <Database className="w-3.5 h-3.5 text-blue-500 flex-shrink-0 animate-pulse" />
             <span className="text-blue-700 text-xs font-medium">

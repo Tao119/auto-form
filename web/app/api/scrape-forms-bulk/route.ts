@@ -108,8 +108,8 @@ function fetchUrl(rawUrl: string, timeoutMs: number): Promise<FetchResult> {
   })
 }
 
-function cleanHtmlToText(html: string): string {
-  return html
+function stripHtmlTags(raw: string): string {
+  return raw
     .replace(/<script[\s\S]*?<\/script>/gi, '')
     .replace(/<style[\s\S]*?<\/style>/gi, '')
     .replace(/<[^>]+>/g, ' ')
@@ -120,7 +120,23 @@ function cleanHtmlToText(html: string): string {
     .replace(/&quot;/g, '"')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 3000) // GPT only needs the first ~3000 chars
+}
+
+/**
+ * Extract text for GPT classification.
+ * Prioritises content around the first <form> tag so GPT sees
+ * the labels and headings that describe the form, not just the page header.
+ */
+function cleanHtmlToText(html: string): string {
+  const formIdx = html.toLowerCase().indexOf('<form')
+  if (formIdx !== -1) {
+    // Take 1 500 chars before the form (for headings/breadcrumbs) + 2 500 after
+    const start = Math.max(0, formIdx - 1500)
+    const end = Math.min(html.length, formIdx + 2500)
+    const segment = html.slice(start, end)
+    return stripHtmlTags(segment).slice(0, 3000)
+  }
+  return stripHtmlTags(html).slice(0, 3000)
 }
 
 function extractTitle(html: string): string {
@@ -137,16 +153,21 @@ function extractForms(html: string, baseUrl: string): {
   hasEmailContact: boolean
   contactLinks: Array<{ url: string; text: string; score: number }>
 } {
+  // Specific contact-page text anchors — require the link text to clearly say "contact us"
   const CONTACT_TEXT_KW = [
-    'お問い合わせ','contact','問い合わせ','ご相談','メールフォーム','inquiry',
-    'ご連絡','メール送信','連絡','toiawase','mail','メッセージ','無料相談',
-    '資料請求','ご質問','お問合せ','お問合わせ','ご意見','ご要望','feedback',
-    'renraku','goiken','send message','write to us','get in touch',
+    'お問い合わせ','お問合わせ','お問合せ','otoiawase',
+    'contact us','contact form','inquiry','問い合わせフォーム',
+    'ご相談','メールフォーム','メール送信','renraku','goiken',
+    'ご連絡','無料相談','資料請求','send message','write to us','get in touch',
+    // Looser (lower weight) — matched as text but NOT sole basis for accepting
+    'contact','feedback',
   ]
+  // URL-path patterns that strongly suggest a contact page
   const CONTACT_URL_KW = [
-    'contact','inquiry','toiawase','otoiawase','form','mailform','mail',
-    'ask','support','feedback','renraku','goiken','send','message',
+    'contact','inquiry','toiawase','otoiawase','mailform',
+    'ask-us','askus','feedback','renraku','goiken',
     'お問い合わせ','問い合わせ','ご相談','ご連絡','cgi-bin','cgi/',
+    // Note: 'form','mail','send','message','support' intentionally removed — too generic
   ]
   const BOOKING_KW = [
     '予約','ご予約','reservation','booking','ネット予約','hotpepper',
@@ -158,9 +179,12 @@ function extractForms(html: string, baseUrl: string): {
     'airreserve.net','lin.ee','page.line.me','tally.so','paperform.co',
   ]
 
+  // Require textarea (message field): filters out search boxes, login forms, newsletter signups
   const hasInlineForm = /<form[\s>]/i.test(html) && (
-    /textarea|<input[^>]+type=["']?(text|email|tel)/i.test(html) ||
-    /お問い合わせ|ご連絡|ご相談|メッセージ|送信/i.test(html)
+    /textarea/i.test(html) ||
+    (/<input[^>]+type=["']?(email|tel)/i.test(html) &&
+     /<(input|button)[^>]*type=["']?submit/i.test(html) &&
+     /お問い合わせ|ご連絡|ご相談|inquiry|contact/i.test(html))
   )
 
   const linkRegex = /<a([^>]*)>([\s\S]*?)<\/a>/gi
@@ -203,11 +227,13 @@ function extractForms(html: string, baseUrl: string): {
     let score = 0
     for (const kw of CONTACT_TEXT_KW) { if (lText.includes(kw.toLowerCase())) { score += 10; break } }
     for (const kw of CONTACT_URL_KW) { if (lUrl.includes(kw.toLowerCase())) { score += 8; break } }
-    if (/\/(contact|inquiry|toiawase|otoiawase|mailform|mail|form|ask|feedback|support)(\/|\.|$|\?)/i.test(absoluteUrl)) score += 5
+    // Path segment must be exactly the keyword (word-boundary)
+    if (/\/(contact|inquiry|toiawase|otoiawase|mailform|feedback)(\/|\.|$|\?|_|-)/i.test(absoluteUrl)) score += 5
     if (/\/cgi(-bin)?\/.*form/i.test(absoluteUrl)) score += 12
     if (isExternal) score += 15
 
-    if (score > 0) links.push({ url: absoluteUrl, text: rawText.slice(0, 80), score })
+    // Require at least a URL keyword match (8) to avoid weak false positives
+    if (score >= 8) links.push({ url: absoluteUrl, text: rawText.slice(0, 80), score })
   }
   links.sort((a, b) => b.score - a.score)
 
@@ -215,8 +241,11 @@ function extractForms(html: string, baseUrl: string): {
   const emailM = html.match(/([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-z]{2,4})/)
   const email = mailtoM ? mailtoM[1] : emailM ? emailM[1] : null
 
-  const phoneM = html.match(/tel:([0-9\-+\s()]{8,15})/i) || html.match(/(0[0-9]{1,4}[-\s][0-9]{2,4}[-\s][0-9]{3,4})/)
-  const phone = phoneM ? phoneM[1].replace(/\s/g, '').trim() : null
+  // tel: link is most reliable; fall back to text patterns with hyphen/en-dash/em-dash separators
+  const phoneM = html.match(/tel:([\d\-+\s()]{8,15})/i)
+    || html.match(/(0\d{1,4}[－\-–—]\d{1,4}[－\-–—]\d{3,4})/)
+    || html.match(/(0[0-9]{9,10})/)  // 11-digit mobile like 09012345678
+  const phone = phoneM ? phoneM[1].replace(/[\s－–—]/g, '-').trim() : null
 
   let hasContactLink = links.length > 0
   let formUrl: string | null = links.length > 0 ? links[0].url : null
@@ -227,12 +256,32 @@ function extractForms(html: string, baseUrl: string): {
   }
 
   const hasEmailContact = !!email
-  if (!hasContactLink && hasEmailContact) {
-    formUrl = baseUrl || null
-    hasContactLink = true
-  }
+  // NOTE: email-only sites are NOT counted as having a contact form.
+  // Email is stored for reference but formUrl must point to an actual web form.
 
   return { formUrl, email, phone, hasContactLink, hasInlineForm, hasEmailContact, contactLinks: links.slice(0, 3) }
+}
+
+/**
+ * Verify that a fetched HTML page actually contains a contact form.
+ * Rejects login pages, search boxes, booking-only pages, etc.
+ */
+function validateFormPage(html: string): boolean {
+  // External form embeds (iframe or script pointing to known form SaaS)
+  if (/docs\.google\.com\/forms|form\.run|typeform\.com|jotform\.com|tayori\.com|formstack\.com|coubic\.com/i.test(html)) return true
+
+  const hasForm = /<form[\s>]/i.test(html)
+  if (!hasForm) return false
+
+  // textarea is the strongest signal — almost all inquiry forms have a message field
+  if (/textarea/i.test(html)) return true
+
+  // email/tel input + submit + contact keyword
+  const hasContactInput = /<input[^>]+type=["']?(email|tel)/i.test(html)
+  const hasSubmit = /<(input|button)[^>]*type=["']?submit/i.test(html)
+  const hasContactKw = /お問い合わせ|ご連絡|ご相談|inquiry|contact|message|send/i.test(html)
+
+  return hasContactInput && hasSubmit && hasContactKw
 }
 
 async function processItem(
@@ -256,18 +305,60 @@ async function processItem(
   // Step 2: extract form links
   const extracted = extractForms(hpFetch.html, baseUrl)
 
-  // Step 3: optionally fetch form page
+  // Step 3: fetch form page and validate it actually contains a contact form
   let formPageText: string | null = null
   let formPageTitle: string | null = null
 
   if (fetchFormPage && extracted.formUrl && extracted.hasContactLink) {
-    try {
-      const formFetch = await fetchUrl(extracted.formUrl, timeoutMs)
-      if (formFetch.html) {
-        formPageText = cleanHtmlToText(formFetch.html)
-        formPageTitle = extractTitle(formFetch.html)
+    // If formUrl is the HP itself (inline form), reuse the already-fetched HTML
+    const isInlinePage = extracted.formUrl === baseUrl
+    const formHtml = isInlinePage ? hpFetch.html : null
+
+    const tryFetchAndValidate = async (targetUrl: string, cachedHtml: string | null): Promise<{ html: string; valid: boolean } | null> => {
+      try {
+        let html: string
+        if (cachedHtml !== null) {
+          html = cachedHtml
+        } else {
+          const result = await fetchUrl(targetUrl, timeoutMs)
+          // Reject 4xx/5xx responses (broken links, access-denied, etc.)
+          if (result.statusCode && result.statusCode >= 400) return null
+          html = result.html
+        }
+        if (!html) return null
+        return { html, valid: validateFormPage(html) }
+      } catch { return null }
+    }
+
+    const primary = await tryFetchAndValidate(extracted.formUrl, formHtml)
+
+    if (primary?.valid) {
+      formPageText = cleanHtmlToText(primary.html)
+      formPageTitle = extractTitle(primary.html)
+    } else {
+      // Try fallback links (lower-scored candidates)
+      let validated = false
+      for (const link of extracted.contactLinks.filter(l => l.url !== extracted.formUrl)) {
+        const fallback = await tryFetchAndValidate(link.url, null)
+        if (fallback?.valid) {
+          extracted.formUrl = link.url
+          formPageText = cleanHtmlToText(fallback.html)
+          formPageTitle = extractTitle(fallback.html)
+          validated = true
+          break
+        }
       }
-    } catch { /* ignore form page fetch failures */ }
+      if (!validated) {
+        // No validated form found — discard
+        extracted.formUrl = null
+        extracted.hasContactLink = false
+        if (primary) {
+          // Still capture page text for diagnostics
+          formPageText = cleanHtmlToText(primary.html)
+          formPageTitle = extractTitle(primary.html)
+        }
+      }
+    }
   }
 
   return { url, baseUrl, ...extracted, formPageText, formPageTitle, error: null }

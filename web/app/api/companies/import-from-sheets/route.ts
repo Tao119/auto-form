@@ -20,16 +20,9 @@ export async function POST(req: NextRequest) {
 
     const { added, duplicates } = addCompanies(inputs)
 
-    return NextResponse.json({
-      imported: added,
-      duplicates,
-      total: rows.length,
-    })
-  } catch (error) {
-    console.error('POST /api/companies/import-from-sheets error:', error)
-    return NextResponse.json(
-      { error: 'Failed to import from Google Sheets' },
-      { status: 500 }
-    )
+    return NextResponse.json({ success: true, imported: added, duplicates, total: rows.length })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    return NextResponse.json({ success: false, error: msg }, { status: 500 })
   }
 }
