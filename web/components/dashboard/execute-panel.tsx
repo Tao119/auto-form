@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import dynamic from 'next/dynamic'
-import { Play, Loader2, CheckCircle2, XCircle, ChevronDown, Plus, FolderOpen, Database, X, Map, List, Hash, ExternalLink } from 'lucide-react'
+import { Play, Loader2, CheckCircle2, XCircle, ChevronDown, Plus, FolderOpen, Database, X, Map, List, Hash, ExternalLink, Square } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import type { Preset, Project, SearchMode } from '@/lib/types'
 import { ProjectCreateModal } from '@/components/modals/project-create-modal'
@@ -59,8 +59,26 @@ function generateRunId() {
   return `run-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
 }
 
+const EP_STORAGE_KEY = 'execute_panel_settings'
+
+function loadPanelSettings(): {
+  searchMode?: SearchMode; industry?: string; customIndustry?: string
+  selectedAreas?: string[]; maxResults?: number; selectedProjectId?: string
+} {
+  try {
+    const raw = localStorage.getItem(EP_STORAGE_KEY)
+    return raw ? JSON.parse(raw) : {}
+  } catch { return {} }
+}
+function savePanelSettings(s: Record<string, unknown>) {
+  try { localStorage.setItem(EP_STORAGE_KEY, JSON.stringify(s)) } catch {}
+}
+
 export default function ExecutePanel() {
   const router = useRouter()
+
+  // Load persisted settings once on mount
+  const [_settingsLoaded, setSettingsLoaded] = useState(false)
   const [searchMode, setSearchMode] = useState<SearchMode>('prefecture')
   const [industry, setIndustry] = useState('美容室')
   const [customIndustry, setCustomIndustry] = useState('')
@@ -86,6 +104,9 @@ export default function ExecutePanel() {
   const [presetNameInput, setPresetNameInput] = useState('')
   const [showPresetNameInput, setShowPresetNameInput] = useState(false)
   const [savingPreset, setSavingPreset] = useState(false)
+  const [currentRunIds, setCurrentRunIds] = useState<string[]>([])
+  const [canceling, setCanceling] = useState(false)
+  const presetDropdownRef = useRef<HTMLDivElement>(null)
 
   // Track when the first item appeared (for items/min rate calculation)
   const firstItemTimeRef = useRef<number | null>(null)
@@ -97,11 +118,40 @@ export default function ExecutePanel() {
     (searchMode !== 'prefecture' || selectedAreas.length > 0) &&
     (searchMode !== 'radius' || !!mapValue)
 
+  // Restore persisted settings on first mount
+  useEffect(() => {
+    const s = loadPanelSettings()
+    if (s.searchMode) setSearchMode(s.searchMode)
+    if (s.industry) setIndustry(s.industry)
+    if (s.customIndustry) setCustomIndustry(s.customIndustry)
+    if (Array.isArray(s.selectedAreas) && s.selectedAreas.length > 0) setSelectedAreas(s.selectedAreas)
+    if (s.maxResults !== undefined) setMaxResults(s.maxResults)
+    setSettingsLoaded(true)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Persist settings whenever they change (after initial load)
+  useEffect(() => {
+    if (!_settingsLoaded) return
+    savePanelSettings({ searchMode, industry, customIndustry, selectedAreas, maxResults, selectedProjectId })
+  }, [_settingsLoaded, searchMode, industry, customIndustry, selectedAreas, maxResults, selectedProjectId])
+
   // Close area dropdown on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (areaDropdownRef.current && !areaDropdownRef.current.contains(e.target as Node)) {
         setAreaDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  // Close preset dropdown on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (presetDropdownRef.current && !presetDropdownRef.current.contains(e.target as Node)) {
+        setShowPresets(false)
       }
     }
     document.addEventListener('mousedown', handler)
@@ -133,8 +183,13 @@ export default function ExecutePanel() {
     fetch('/api/projects').then((r) => r.json()).then((d) => {
       if (d.success) {
         setProjects(d.data)
-        if (d.data.length > 0 && !selectedProjectId) {
-          setSelectedProjectId(d.data[0].id)
+        if (d.data.length > 0) {
+          // Restore persisted project selection if it still exists; else default to first project
+          const saved = loadPanelSettings()
+          const restoredId = saved.selectedProjectId && d.data.some((p: Project) => p.id === saved.selectedProjectId)
+            ? saved.selectedProjectId
+            : d.data[0].id
+          setSelectedProjectId((prev) => prev || restoredId)
         }
       }
     }).catch(() => {})
@@ -219,6 +274,7 @@ export default function ExecutePanel() {
     setItemsWritten(0)
     setLiveCount(0)
     setBatchProgress(null)
+    setCurrentRunIds([])
     firstItemTimeRef.current = null
     prevLiveCountRef.current = 0
 
@@ -296,6 +352,7 @@ export default function ExecutePanel() {
 
     const progress: BatchProgress = { total: runIds.length, done: 0, success: 0, error: 0 }
     setBatchProgress({ ...progress })
+    setCurrentRunIds([...runIds])
     setStatus('running')
     setLog(`${runIds.length} エリアを実行開始しました`)
 
@@ -309,6 +366,7 @@ export default function ExecutePanel() {
         if (progress.done === progress.total) {
           const allOk = progress.error === 0
           setStatus(allOk ? 'success' : progress.success > 0 ? 'success' : 'error')
+          setCurrentRunIds([])
           setLog(
             allOk
               ? `完了: ${progress.success} エリア全て成功`
@@ -322,6 +380,27 @@ export default function ExecutePanel() {
   }
   // Sync ref on every render so the keyboard handler always calls the latest version
   useEffect(() => { handleExecuteRef.current = handleExecute })
+
+  const handleCancel = async () => {
+    if (currentRunIds.length === 0 || canceling) return
+    setCanceling(true)
+    try {
+      await Promise.all(currentRunIds.map((runId) =>
+        fetch(`/api/projects/runs/${runId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'error' }),
+        }).catch(() => {})
+      ))
+    } finally {
+      setCanceling(false)
+      setCurrentRunIds([])
+      setStatus('idle')
+      setLog('')
+      setBatchProgress(null)
+      setLiveCount(0)
+    }
+  }
 
   const loadPreset = (preset: Preset) => {
     const t = preset.searchTarget
@@ -389,7 +468,7 @@ export default function ExecutePanel() {
             </span>
           )}
         </div>
-        <div className="relative">
+        <div className="relative" ref={presetDropdownRef}>
           <button
             onClick={() => setShowPresets(!showPresets)}
             className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1 border border-gray-300 rounded px-2 py-1"
@@ -675,7 +754,6 @@ export default function ExecutePanel() {
             onClick={handleExecute}
             disabled={!canExecute}
             className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-medium px-5 py-2 rounded transition-colors text-sm"
-            title="Ctrl+Enter / ⌘+Enter"
           >
             {isRunning ? (
               <><Loader2 className="w-4 h-4 animate-spin" /> {status === 'queued' ? '待機中...' : '実行中...'}</>
@@ -689,6 +767,19 @@ export default function ExecutePanel() {
               </>
             )}
           </button>
+          {!isRunning && (
+            <span className="text-xs text-gray-400 select-none">⌘↵</span>
+          )}
+          {isRunning && currentRunIds.length > 0 && (
+            <button
+              onClick={handleCancel}
+              disabled={canceling}
+              className="flex items-center gap-1.5 text-xs text-red-600 hover:text-red-800 border border-red-300 hover:border-red-500 rounded px-2.5 py-1.5 transition-colors disabled:opacity-50"
+            >
+              {canceling ? <Loader2 className="w-3 h-3 animate-spin" /> : <Square className="w-3 h-3 fill-current" />}
+              キャンセル
+            </button>
+          )}
 
           {status !== 'idle' && !batchProgress && (
             <div className="flex items-center gap-2 text-sm">

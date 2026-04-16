@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { updateRunStatus } from '@/lib/project-manager'
-import { markJobDone } from '@/lib/run-queue'
+import { markJobDone, isQueueIdle } from '@/lib/run-queue'
 import { calcCostUsd } from '@/lib/n8n-sync'
 import { addCompanies } from '@/lib/companies-db'
 import type { CompanyInput } from '@/lib/companies-db'
@@ -67,6 +67,7 @@ export async function POST(
 
     // Validate and filter company records
     let actualAdded = 0
+    let actualUpgraded = 0
     if (body.companies?.length) {
       const validCompanies: CompanyInput[] = []
       for (const raw of body.companies) {
@@ -78,8 +79,9 @@ export async function POST(
         validCompanies.push(c as CompanyInput)
       }
       if (validCompanies.length > 0) {
-        const { added } = addCompanies(validCompanies)
+        const { added, upgraded } = addCompanies(validCompanies)
         actualAdded = added
+        actualUpgraded = upgraded
       }
     }
 
@@ -98,16 +100,25 @@ export async function POST(
 
     // Trigger next queued job
     const next = markJobDone(runId, body.status === 'success' ? 'completed' : 'failed', body.error)
+    const base = process.env.INTERNAL_BASE_URL || 'http://localhost:3003'
     if (next) {
-      const base = process.env.INTERNAL_BASE_URL || 'http://localhost:3003'
       fetch(`${base}/api/queue/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ runId: next.runId, params: next.params }),
       }).catch(() => {})
+    } else if (isQueueIdle()) {
+      // Queue is fully drained — run DB housekeeping in the background (non-blocking).
+      // Also prune rows older than 90 days that are in terminal statuses (送信済み, スキップ)
+      // to keep the DB lean without manual intervention.
+      fetch(`${base}/api/admin/maintenance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prune: true, daysOld: 90 }),
+      }).catch(() => {})
     }
 
-    return NextResponse.json({ success: true, itemsWritten })
+    return NextResponse.json({ success: true, itemsWritten, upgraded: actualUpgraded })
   } catch (e) {
     return NextResponse.json({ success: false, error: String(e) }, { status: 400 })
   }

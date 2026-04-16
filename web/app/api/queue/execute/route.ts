@@ -63,6 +63,8 @@ export async function POST(req: NextRequest) {
       searchTarget: {
         industry: execFields.industry,
         area: execFields.area,
+        // Persist the full areas array so the retry button can reconstruct the exact selection
+        ...(execFields.areas && execFields.areas.length > 1 ? { areas: execFields.areas } : {}),
         keywords,
         maxResults,
         ...(execFields.searchMode === 'radius' && {

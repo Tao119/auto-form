@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getCompanies, countCompanies, getDistinctValues } from '@/lib/companies-db'
+import { getCompanies, countCompaniesAndFormCount, getDistinctValues } from '@/lib/companies-db'
 import type { Company, CompanySortBy, CompanySortDir } from '@/lib/companies-db'
 import type { CompanyRow } from '@/lib/types'
 
@@ -42,12 +42,13 @@ export async function GET(req: NextRequest) {
     formType:  searchParams.get('formType') || undefined,
     search:    searchParams.get('search') || undefined,
     hasForm:   searchParams.get('hasForm') || undefined,
+    hasPhone:  searchParams.get('hasPhone') || undefined,
+    hasEmail:  searchParams.get('hasEmail') || undefined,
   }
 
   try {
-    // Count and paginate in SQLite — no full table scans in JS
-    const total = countCompanies(baseFilters)
-    const formCount = countCompanies({ ...baseFilters, hasForm: 'true' })
+    // Count and paginate in SQLite — combined query to get total + formCount + phoneCount + emailCount in one pass
+    const { total, formCount, phoneCount, emailCount } = countCompaniesAndFormCount(baseFilters)
     const offset = (page - 1) * limit
     const companies = getCompanies({ ...baseFilters, limit, offset, sortBy, sortDir })
     const data = companies.map(toRow)
@@ -55,7 +56,7 @@ export async function GET(req: NextRequest) {
     // Distinct values for dropdown filters (scoped to project, no other filters)
     const { industries, areas } = getDistinctValues(projectId)
 
-    return NextResponse.json({ success: true, data, total, formCount, page, limit, industries, areas })
+    return NextResponse.json({ success: true, data, total, formCount, phoneCount, emailCount, page, limit, industries, areas })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     return NextResponse.json({ success: false, error: msg, data: [] as CompanyRow[] }, { status: 500 })

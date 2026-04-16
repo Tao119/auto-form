@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getCompanies, addCompanies, updateCompany, batchUpdateStatus } from '@/lib/companies-db'
+import { getCompanies, addCompanies, updateCompany, batchUpdateStatus, batchUpdateStatusByFilter } from '@/lib/companies-db'
 import type { CompanyInput } from '@/lib/companies-db'
 import { z } from 'zod'
 
@@ -44,6 +44,19 @@ export async function POST(req: NextRequest) {
 const VALID_STATUSES = ['未送信', '送信済み', 'エラー', 'スキップ'] as const
 const StatusEnum = z.enum(VALID_STATUSES)
 
+const FilterSchema = z.object({
+  projectId: z.string().optional(),
+  runId:     z.string().optional(),
+  industry:  z.string().optional(),
+  area:      z.string().optional(),
+  status:    z.string().optional(),
+  formType:  z.string().optional(),
+  hasForm:   z.enum(['true', 'false', '']).optional(),
+  hasPhone:  z.enum(['true', '']).optional(),
+  hasEmail:  z.enum(['true', '']).optional(),
+  search:    z.string().optional(),
+})
+
 const PatchSchema = z.union([
   // Single company: supports status and/or notes update
   z.object({
@@ -51,16 +64,21 @@ const PatchSchema = z.union([
     status: StatusEnum.optional(),
     notes: z.string().max(500).optional(),
   }).refine((d) => d.status !== undefined || d.notes !== undefined, { message: 'status or notes required' }),
-  // Bulk status update (no notes support for batch)
+  // Bulk by IDs (no notes support for batch)
   z.object({ ids: z.array(z.string()).min(1).max(5000), status: StatusEnum }),
+  // Bulk by filter — "select all pages" UX
+  z.object({ filter: FilterSchema, status: StatusEnum }),
 ])
 
 // PATCH /api/companies
-// Body: { id, status?, notes? }  or  { ids[], status }
+// Body: { id, status?, notes? }  or  { ids[], status }  or  { filter, status }
 export async function PATCH(req: NextRequest) {
   try {
     const body = PatchSchema.parse(await req.json())
-    if ('ids' in body) {
+    if ('filter' in body) {
+      const updated = batchUpdateStatusByFilter(body.filter, body.status)
+      return NextResponse.json({ success: true, updated })
+    } else if ('ids' in body) {
       const updated = batchUpdateStatus(body.ids, body.status)
       return NextResponse.json({ success: true, updated })
     } else {

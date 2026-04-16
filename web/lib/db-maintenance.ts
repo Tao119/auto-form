@@ -76,6 +76,12 @@ export function runMaintenance(): MaintenanceResult {
   const walRow = db.pragma('wal_checkpoint(TRUNCATE)') as WalRow[]
   const walCheckpointPages = walRow[0]?.checkpointed ?? 0
 
+  // PRAGMA optimize updates query-planner statistics so SQLite selects the best
+  // index after bulk inserts.  analysis_limit caps the work per table to avoid
+  // long pauses on large DBs.
+  db.pragma('analysis_limit = 400')
+  db.pragma('optimize')
+
   // VACUUM reclaims space freed by DELETE operations (e.g. after large run deletions).
   // Uses the incremental mode to avoid locking the DB for extended periods.
   db.exec('VACUUM')

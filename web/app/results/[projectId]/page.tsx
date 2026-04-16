@@ -38,12 +38,16 @@ interface FilterState {
   status: string
   formType: string
   hasForm: string
+  hasPhone: string
+  hasEmail: string
   search: string
 }
 
 interface Meta {
   total: number
   formCount: number
+  phoneCount: number
+  emailCount: number
   page: number
   limit: number
   industries: string[]
@@ -77,8 +81,8 @@ export default function ProjectResultsPage() {
   const [project, setProject] = useState<ProjectDetail | null>(null)
   const [selectedRunId, setSelectedRunId] = useState<string>('')
   const [rows, setRows] = useState<CompanyRow[]>([])
-  const [meta, setMeta] = useState<Meta>({ total: 0, formCount: 0, page: 1, limit: 100, industries: [], areas: [] })
-  const [filters, setFilters] = useState<FilterState>({ industry: '', area: '', status: '', formType: '', hasForm: '', search: '' })
+  const [meta, setMeta] = useState<Meta>({ total: 0, formCount: 0, phoneCount: 0, emailCount: 0, page: 1, limit: 100, industries: [], areas: [] })
+  const [filters, setFilters] = useState<FilterState>({ industry: '', area: '', status: '', formType: '', hasForm: '', hasPhone: '', hasEmail: '', search: '' })
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [sortBy, setSortBy] = useState<string>('collectedAt')
@@ -89,21 +93,26 @@ export default function ProjectResultsPage() {
   const [page, setPage] = useState(1)
   const [exporting, setExporting] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [selectAllPages, setSelectAllPages] = useState(false)
   const [batchUpdating, setBatchUpdating] = useState(false)
   const [batchSuccessMsg, setBatchSuccessMsg] = useState('')
+  const [cancelingRunId, setCancelingRunId] = useState<string | null>(null)
+  const [retryingRunId, setRetryingRunId] = useState<string | null>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
 
   // Restore persisted filters from localStorage on first mount
   useEffect(() => {
     if (!projectId) return
     const saved = loadSavedFilters(projectId)
-    if (saved.industry !== undefined || saved.area !== undefined || saved.status !== undefined || saved.formType !== undefined || saved.hasForm !== undefined) {
+    if (saved.industry !== undefined || saved.area !== undefined || saved.status !== undefined || saved.formType !== undefined || saved.hasForm !== undefined || saved.hasPhone !== undefined || saved.hasEmail !== undefined) {
       setFilters({
         industry: saved.industry ?? '',
         area: saved.area ?? '',
         status: saved.status ?? '',
         formType: saved.formType ?? '',
         hasForm: saved.hasForm ?? '',
+        hasPhone: (saved as { hasPhone?: string }).hasPhone ?? '',
+        hasEmail: (saved as { hasEmail?: string }).hasEmail ?? '',
         search: '',  // never restore search — too stale
       })
     }
@@ -133,8 +142,9 @@ export default function ProjectResultsPage() {
         e.preventDefault()
         searchInputRef.current?.focus()
       }
-      if (e.key === 'Escape' && !inInput && selectedIds.size > 0) {
+      if (e.key === 'Escape' && !inInput && (selectedIds.size > 0 || selectAllPages)) {
         setSelectedIds(new Set())
+        setSelectAllPages(false)
       }
       // 'a' key: select all rows on this page (hold Shift to deselect all)
       if (e.key === 'a' && !e.metaKey && !e.ctrlKey && !e.shiftKey && !inInput) {
@@ -145,7 +155,7 @@ export default function ProjectResultsPage() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [selectedIds, rows])
+  }, [selectedIds, selectAllPages, rows])
 
   // Debounce search input to avoid hammering the API on every keystroke
   useEffect(() => {
@@ -199,18 +209,22 @@ export default function ProjectResultsPage() {
       if (filters.status) params.set('status', filters.status)
       if (filters.formType) params.set('formType', filters.formType)
       if (filters.hasForm) params.set('hasForm', filters.hasForm)
+      if (filters.hasPhone) params.set('hasPhone', filters.hasPhone)
+      if (filters.hasEmail) params.set('hasEmail', filters.hasEmail)
       if (debouncedSearch) params.set('search', debouncedSearch)
       const res = await fetch(`/api/sheets/data?${params}`)
       const data = await res.json()
       if (data.success) {
         setRows(data.data)
         setMeta({
-          total: data.total ?? 0,
-          formCount: data.formCount ?? 0,
-          page: data.page ?? p,
-          limit: data.limit ?? 100,
+          total:      data.total      ?? 0,
+          formCount:  data.formCount  ?? 0,
+          phoneCount: data.phoneCount ?? 0,
+          emailCount: data.emailCount ?? 0,
+          page:       data.page  ?? p,
+          limit:      data.limit ?? 100,
           industries: data.industries ?? [],
-          areas: data.areas ?? [],
+          areas:      data.areas      ?? [],
         })
         setPage(p)
       } else {
@@ -221,7 +235,7 @@ export default function ProjectResultsPage() {
     } finally {
       setLoading(false)
     }
-  }, [projectId, selectedRunId, filters.industry, filters.area, filters.status, filters.formType, filters.hasForm, debouncedSearch, sortBy, sortDir])
+  }, [projectId, selectedRunId, filters.industry, filters.area, filters.status, filters.formType, filters.hasForm, filters.hasPhone, filters.hasEmail, debouncedSearch, sortBy, sortDir])
 
   useEffect(() => { fetchData(1) }, [fetchData])
 
@@ -260,6 +274,8 @@ export default function ProjectResultsPage() {
       if (filters.status) params.set('status', filters.status)
       if (filters.formType) params.set('formType', filters.formType)
       if (filters.hasForm) params.set('hasForm', filters.hasForm)
+      if (filters.hasPhone) params.set('hasPhone', filters.hasPhone)
+      if (filters.hasEmail) params.set('hasEmail', filters.hasEmail)
       if (filters.search) params.set('search', filters.search)
       params.set('sortBy', sortBy)
       params.set('sortDir', sortDir)
@@ -287,26 +303,99 @@ export default function ProjectResultsPage() {
   }
 
   const clearFilters = () => {
-    setFilters({ industry: '', area: '', status: '', formType: '', hasForm: '', search: '' })
+    setFilters({ industry: '', area: '', status: '', formType: '', hasForm: '', hasPhone: '', hasEmail: '', search: '' })
     if (projectId) {
       try { localStorage.removeItem(`results_filters_${projectId}`) } catch {}
     }
   }
-  const hasFilters = filters.industry || filters.area || filters.status || filters.formType || filters.hasForm || filters.search
+  const hasFilters = filters.industry || filters.area || filters.status || filters.formType || filters.hasForm || filters.hasPhone || filters.hasEmail || filters.search
 
-  const handleBatchStatusUpdate = useCallback(async (newStatus: string) => {
-    if (selectedIds.size === 0) return
-    setBatchUpdating(true)
+  const handleCancelRun = async (runId: string) => {
+    setCancelingRunId(runId)
     try {
-      const res = await fetch('/api/companies', {
+      await fetch(`/api/projects/runs/${runId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: Array.from(selectedIds), status: newStatus }),
+        body: JSON.stringify({ status: 'error' }),
+      })
+      refreshProject()
+    } catch { /* ignore */ } finally {
+      setCancelingRunId(null)
+    }
+  }
+
+  const handleRetryRun = async (run: ProjectRun) => {
+    if (!projectId || retryingRunId) return
+    setRetryingRunId(run.id)
+    try {
+      const newRunId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+      const st = run.searchTarget
+      const body: Record<string, unknown> = {
+        runId: newRunId,
+        projectId,
+        label: `[再実行] ${run.label}`,
+        industry: st.industry,
+        area: st.area,
+        keywords: st.keywords,
+        maxResults: st.maxResults,
+      }
+      if (st.areas && st.areas.length > 1) body.areas = st.areas
+      if (st.searchMode === 'radius') {
+        body.searchMode = 'radius'
+        body.lat = st.lat
+        body.lng = st.lng
+        body.radiusKm = st.radiusKm
+      }
+      const res = await fetch('/api/queue/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
       })
       const data = await res.json()
       if (data.success) {
-        const n = selectedIds.size
+        refreshProject()
+        setSelectedRunId(newRunId)
+      } else {
+        setError(data.error || '再実行の開始に失敗しました')
+      }
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setRetryingRunId(null)
+    }
+  }
+
+  const handleBatchStatusUpdate = useCallback(async (newStatus: string) => {
+    if (!selectAllPages && selectedIds.size === 0) return
+    setBatchUpdating(true)
+    try {
+      const payload = selectAllPages
+        ? {
+            filter: {
+              ...(selectedRunId ? { runId: selectedRunId } : { projectId }),
+              ...(filters.industry ? { industry: filters.industry } : {}),
+              ...(filters.area     ? { area: filters.area }         : {}),
+              ...(filters.status   ? { status: filters.status }     : {}),
+              ...(filters.formType ? { formType: filters.formType } : {}),
+              ...(filters.hasForm  ? { hasForm: filters.hasForm }   : {}),
+              ...(filters.hasPhone ? { hasPhone: filters.hasPhone } : {}),
+              ...(filters.hasEmail ? { hasEmail: filters.hasEmail } : {}),
+              ...(debouncedSearch  ? { search: debouncedSearch }    : {}),
+            },
+            status: newStatus,
+          }
+        : { ids: Array.from(selectedIds), status: newStatus }
+
+      const res = await fetch('/api/companies', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const data = await res.json()
+      if (data.success) {
+        const n = selectAllPages ? meta.total : selectedIds.size
         setSelectedIds(new Set())
+        setSelectAllPages(false)
         fetchData(page)
         setBatchSuccessMsg(`${n}件を「${newStatus}」に変更しました`)
         setTimeout(() => setBatchSuccessMsg(''), 2500)
@@ -318,30 +407,43 @@ export default function ProjectResultsPage() {
     } finally {
       setBatchUpdating(false)
     }
-  }, [selectedIds, fetchData, page])
+  }, [selectAllPages, selectedIds, projectId, selectedRunId, filters, debouncedSearch, meta.total, page, fetchData])
 
   // S key: mark selected rows as 送信済み (handy after manually sending forms)
   // X key: mark selected rows as スキップ (skip entries not suitable for outreach)
+  // O key: open form URLs for selected rows in new tabs (max 5 to avoid popup-blocker issues)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const inInput = document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA' || document.activeElement?.tagName === 'SELECT'
       if (inInput || e.metaKey || e.ctrlKey || e.shiftKey || selectedIds.size === 0) return
       if (e.key === 's') { e.preventDefault(); handleBatchStatusUpdate('送信済み') }
       if (e.key === 'x') { e.preventDefault(); handleBatchStatusUpdate('スキップ') }
+      if (e.key === 'u') { e.preventDefault(); handleBatchStatusUpdate('未送信') }
+      if (e.key === 'o') {
+        e.preventDefault()
+        const urls = rows
+          .filter((r) => r.id && selectedIds.has(r.id) && r['フォームURL'])
+          .slice(0, 5)
+          .map((r) => r['フォームURL']!)
+        urls.forEach((u) => window.open(u, '_blank', 'noopener'))
+      }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [selectedIds, handleBatchStatusUpdate])
+  }, [selectedIds, rows, handleBatchStatusUpdate])
 
   const toggleSelectAll = () => {
     if (selectedIds.size === rows.filter((r) => r.id).length) {
       setSelectedIds(new Set())
+      setSelectAllPages(false)
     } else {
       setSelectedIds(new Set(rows.filter((r) => r.id).map((r) => r.id!)))
     }
   }
 
   const toggleSelect = (id: string) => {
+    // If "select all pages" is active, deactivate it when the user manually toggles a row
+    if (selectAllPages) setSelectAllPages(false)
     const next = new Set(selectedIds)
     if (next.has(id)) next.delete(id)
     else next.add(id)
@@ -430,7 +532,7 @@ export default function ProjectResultsPage() {
             className="flex items-center gap-1 text-xs bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white rounded px-3 py-1.5 transition-colors"
           >
             <Download className="w-3 h-3" />
-            {exporting ? 'エクスポート中...' : selectedIds.size > 0 ? `選択(${selectedIds.size})をCSV出力` : 'CSV出力'}
+            {exporting ? 'エクスポート中...' : selectedIds.size > 0 ? `選択(${selectedIds.size})をCSV出力` : meta.total > 0 ? `CSV出力 (${meta.total.toLocaleString()}件)` : 'CSV出力'}
           </button>
         </div>
       </div>
@@ -450,12 +552,25 @@ export default function ProjectResultsPage() {
               全ての実行
             </button>
             {project.runs.map((run) => (
+              <div key={run.id} className="flex-shrink-0 flex items-center">
               <button
-                key={run.id}
                 onClick={() => setSelectedRunId(run.id)}
+                title={(() => {
+                  if (run.status === 'error' && run.error) return `エラー: ${run.error}`
+                  if ((run.status === 'success' || run.status === 'completed') && run.completedAt) {
+                    const dur = run.completedAt && run.createdAt
+                      ? Math.round((new Date(run.completedAt).getTime() - new Date(run.createdAt).getTime()) / 60_000)
+                      : null
+                    return `完了: ${relativeTime(run.completedAt)}${dur !== null && dur >= 0 ? ` (${dur}分)` : ''}`
+                  }
+                  if (run.status === 'running' && run.createdAt) return `開始: ${relativeTime(run.createdAt)}`
+                  return undefined
+                })()}
                 className={`flex-shrink-0 flex items-center gap-1.5 text-xs px-3 py-1.5 rounded border transition-colors ${
                   selectedRunId === run.id
                     ? 'bg-blue-600 border-blue-600 text-white'
+                    : run.status === 'error'
+                    ? 'border-red-300 text-red-700 hover:border-red-400 bg-red-50'
                     : 'border-gray-300 text-gray-600 hover:border-gray-400 hover:text-gray-800 bg-white'
                 }`}
               >
@@ -464,7 +579,39 @@ export default function ProjectResultsPage() {
                 {run.itemsWritten !== undefined && (
                   <span className="text-xs opacity-70">({run.itemsWritten}件)</span>
                 )}
+                {run.estimatedCostUsd !== undefined && run.estimatedCostUsd > 0 && (
+                  <span className="text-xs opacity-50">
+                    {run.estimatedCostUsd < 0.1
+                      ? `${(run.estimatedCostUsd * 100).toFixed(1)}¢`
+                      : `$${run.estimatedCostUsd.toFixed(2)}`}
+                  </span>
+                )}
               </button>
+              {(run.status === 'running' || run.status === 'pending') && (
+                <button
+                  onClick={() => handleCancelRun(run.id)}
+                  disabled={cancelingRunId === run.id}
+                  className="ml-0.5 p-1 text-gray-400 hover:text-red-500 transition-colors disabled:opacity-50"
+                  title="実行をキャンセル"
+                >
+                  {cancelingRunId === run.id
+                    ? <RefreshCw className="w-3 h-3 animate-spin" />
+                    : <X className="w-3 h-3" />}
+                </button>
+              )}
+              {run.status === 'error' && (
+                <button
+                  onClick={() => handleRetryRun(run)}
+                  disabled={!!retryingRunId}
+                  className="ml-0.5 p-1 text-gray-400 hover:text-blue-500 transition-colors disabled:opacity-50"
+                  title="再実行"
+                >
+                  {retryingRunId === run.id
+                    ? <RefreshCw className="w-3 h-3 animate-spin" />
+                    : <RefreshCw className="w-3 h-3" />}
+                </button>
+              )}
+              </div>
             ))}
           </div>
         </div>
@@ -552,6 +699,29 @@ export default function ProjectResultsPage() {
             >
               未処理のみ
             </button>
+            {/* hasPhone / hasEmail quick-filter toggles */}
+            <button
+              onClick={() => setFilters({ ...filters, hasPhone: filters.hasPhone === 'true' ? '' : 'true' })}
+              className={`text-xs px-2.5 py-2 rounded border transition-colors whitespace-nowrap ${
+                filters.hasPhone === 'true'
+                  ? 'bg-indigo-600 border-indigo-600 text-white'
+                  : 'bg-white border-gray-300 text-gray-600 hover:border-gray-400'
+              }`}
+              title="電話番号あり"
+            >
+              電話あり
+            </button>
+            <button
+              onClick={() => setFilters({ ...filters, hasEmail: filters.hasEmail === 'true' ? '' : 'true' })}
+              className={`text-xs px-2.5 py-2 rounded border transition-colors whitespace-nowrap ${
+                filters.hasEmail === 'true'
+                  ? 'bg-indigo-600 border-indigo-600 text-white'
+                  : 'bg-white border-gray-300 text-gray-600 hover:border-gray-400'
+              }`}
+              title="メールアドレスあり"
+            >
+              メールあり
+            </button>
             {hasFilters && (
               <button
                 onClick={clearFilters}
@@ -567,13 +737,23 @@ export default function ProjectResultsPage() {
 
       {/* Count + batch actions */}
       <div className="flex items-center justify-between text-xs text-gray-500">
-        <span>
+        <span className="flex items-center gap-3 flex-wrap">
           {loading ? '読み込み中...' : (
             <>
-              {meta.total.toLocaleString()}件
+              <span>{meta.total.toLocaleString()}件</span>
               {meta.formCount > 0 && !filters.hasForm && (
-                <span className="ml-2 text-green-600">
-                  フォームあり: {meta.formCount.toLocaleString()}件 ({Math.round((meta.formCount / meta.total) * 100)}%)
+                <span className="text-green-600">
+                  フォームあり {meta.formCount.toLocaleString()}件 ({Math.round((meta.formCount / meta.total) * 100)}%)
+                </span>
+              )}
+              {meta.phoneCount > 0 && !filters.hasPhone && (
+                <span className="text-indigo-600">
+                  電話 {meta.phoneCount.toLocaleString()}件
+                </span>
+              )}
+              {meta.emailCount > 0 && !filters.hasEmail && (
+                <span className="text-indigo-600">
+                  メール {meta.emailCount.toLocaleString()}件
                 </span>
               )}
             </>
@@ -581,13 +761,27 @@ export default function ProjectResultsPage() {
         </span>
         <div className="flex items-center gap-2">
           {selectedIds.size === 0 && rows.length > 0 && (
-            <span className="text-gray-400 text-xs hidden md:block" title="A キーで全行選択 / S: 送信済み / X: スキップ">
-              [A] 全選択 &nbsp;·&nbsp; [S] 送信済み &nbsp;·&nbsp; [X] スキップ &nbsp;·&nbsp; [/] 検索
+            <span className="text-gray-400 text-xs hidden md:block" title="A キーで全行選択 / S: 送信済み / X: スキップ / U: 未送信に戻す / O: URLを開く(最大5件) / ←→: ページ移動">
+              [A] 全選択 &nbsp;·&nbsp; [S] 送信済み &nbsp;·&nbsp; [X] スキップ &nbsp;·&nbsp; [U] 未送信 &nbsp;·&nbsp; [O] URL開く &nbsp;·&nbsp; [/] 検索 &nbsp;·&nbsp; [←→] ページ
             </span>
           )}
-          {selectedIds.size > 0 && (
-            <div className="flex items-center gap-1.5">
-              <span className="text-gray-600 font-medium">{selectedIds.size}件選択</span>
+          {(selectedIds.size > 0 || selectAllPages) && (
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {/* Selection count — shows "全N件" when select-all-pages is active */}
+              {selectAllPages ? (
+                <span className="text-blue-700 font-medium">全 {meta.total.toLocaleString()}件選択中</span>
+              ) : (
+                <span className="text-gray-600 font-medium">{selectedIds.size}件選択</span>
+              )}
+              {/* "Select all pages" offer banner (shown when current page is fully selected and more pages exist) */}
+              {!selectAllPages && selectedIds.size > 0 && selectedIds.size === rows.filter((r) => r.id).length && meta.total > rows.length && (
+                <button
+                  onClick={() => setSelectAllPages(true)}
+                  className="text-xs text-blue-600 hover:text-blue-800 underline underline-offset-2"
+                >
+                  フィルター結果の全 {meta.total.toLocaleString()}件を選択
+                </button>
+              )}
               <button
                 onClick={() => handleBatchStatusUpdate('送信済み')}
                 disabled={batchUpdating}
@@ -614,13 +808,26 @@ export default function ProjectResultsPage() {
               <button
                 onClick={() => handleBatchStatusUpdate('未送信')}
                 disabled={batchUpdating}
+                title="U キーでも実行できます"
                 className="text-xs px-2 py-1 border border-gray-300 text-gray-600 hover:bg-gray-50 rounded transition-colors"
               >
-                未送信に戻す
+                未送信に戻す [U]
               </button>
-              <CopyFormUrlsButton ids={selectedIds} rows={rows} />
+              {!selectAllPages && <CopyFormUrlsButton ids={selectedIds} rows={rows} />}
+              {!selectAllPages && rows.some((r) => r.id && selectedIds.has(r.id) && r['フォームURL']) && (
+                <button
+                  onClick={() => {
+                    const urls = rows.filter((r) => r.id && selectedIds.has(r.id) && r['フォームURL']).slice(0, 5).map((r) => r['フォームURL']!)
+                    urls.forEach((u) => window.open(u, '_blank', 'noopener'))
+                  }}
+                  title="選択行のフォームURLを新タブで開く (最大5件) [O]"
+                  className="text-xs px-2 py-1 border border-gray-300 text-gray-600 hover:bg-gray-50 rounded transition-colors"
+                >
+                  URL開く [O]
+                </button>
+              )}
               <button
-                onClick={() => setSelectedIds(new Set())}
+                onClick={() => { setSelectedIds(new Set()); setSelectAllPages(false) }}
                 className="text-xs text-gray-400 hover:text-gray-600"
               >
                 <X className="w-3.5 h-3.5" />
@@ -735,6 +942,9 @@ export default function ProjectResultsPage() {
                       {row['電話番号'] && (
                         <div className="text-xs text-gray-400 mt-0.5 truncate">{row['電話番号']}</div>
                       )}
+                      {row['住所'] && (
+                        <div className="text-xs text-gray-400 mt-0.5 truncate" title={row['住所']}>{row['住所']}</div>
+                      )}
                       {row['メールアドレス'] && (
                         <div className="text-xs text-blue-400 mt-0.5 truncate" title={row['メールアドレス']}>
                           <a href={`mailto:${row['メールアドレス']}`} onClick={(e) => e.stopPropagation()}>
@@ -828,7 +1038,29 @@ export default function ProjectResultsPage() {
             <span className="text-xs text-gray-500">
               {((page - 1) * meta.limit) + 1}–{Math.min(page * meta.limit, meta.total)} / {meta.total}件
             </span>
-            <div className="flex gap-2">
+            <div className="flex items-center gap-2">
+              {/* Jump-to-page input: shown only when there are 5+ pages */}
+              {Math.ceil(meta.total / meta.limit) >= 5 && (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault()
+                    const val = parseInt((e.currentTarget.elements.namedItem('pageNum') as HTMLInputElement).value, 10)
+                    const max = Math.ceil(meta.total / meta.limit)
+                    if (!isNaN(val) && val >= 1 && val <= max) fetchData(val)
+                  }}
+                  className="flex items-center gap-1"
+                >
+                  <input
+                    name="pageNum"
+                    type="number"
+                    min={1}
+                    max={Math.ceil(meta.total / meta.limit)}
+                    placeholder={String(page)}
+                    className="w-14 text-xs px-2 py-1 border border-gray-300 rounded text-center text-gray-700 focus:outline-none focus:border-blue-400"
+                  />
+                  <span className="text-xs text-gray-400">/ {Math.ceil(meta.total / meta.limit)}p</span>
+                </form>
+              )}
               <button
                 onClick={() => fetchData(page - 1)}
                 disabled={page <= 1 || loading}
@@ -855,44 +1087,81 @@ function InlineNotesInput({ id, notes }: { id: string; notes: string }) {
   const [value, setValue] = useState(notes)
   const [saving, setSaving] = useState(false)
   const [dirty, setDirty] = useState(false)
+  const origRef = useRef(notes)
 
   // Sync when parent refreshes data (but not while user is editing)
   useEffect(() => {
-    if (!dirty) setValue(notes)
+    if (!dirty) {
+      setValue(notes)
+      origRef.current = notes
+    }
   }, [notes, dirty])
 
-  const handleBlur = async () => {
-    if (!dirty) return
+  const save = async (val: string) => {
     setSaving(true)
     try {
       await fetch('/api/companies', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, notes: value }),
+        body: JSON.stringify({ id, notes: val }),
       })
+      origRef.current = val
       setDirty(false)
     } catch { /* ignore */ } finally {
       setSaving(false)
     }
   }
 
+  const handleBlur = async () => {
+    if (!dirty) return
+    await save(value)
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur() }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      setValue(origRef.current)
+      setDirty(false)
+      ;(e.target as HTMLInputElement).blur()
+    }
+  }
+
   return (
-    <input
-      type="text"
-      value={value}
-      onChange={(e) => { setValue(e.target.value); setDirty(true) }}
-      onBlur={handleBlur}
-      onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-      placeholder="備考..."
-      maxLength={500}
-      className={`w-full text-xs px-1.5 py-0.5 rounded border transition-colors focus:outline-none ${
-        saving
-          ? 'border-blue-300 bg-blue-50 text-blue-700'
-          : dirty
-          ? 'border-amber-300 bg-amber-50 text-gray-700'
-          : 'border-transparent bg-transparent text-gray-500 hover:border-gray-300 hover:bg-white focus:border-blue-400 focus:bg-white'
-      }`}
-    />
+    <div className="flex items-center gap-0.5 group/notes">
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => { setValue(e.target.value); setDirty(true) }}
+        onBlur={handleBlur}
+        onKeyDown={handleKeyDown}
+        onClick={(e) => e.stopPropagation()}
+        placeholder="備考..."
+        maxLength={500}
+        className={`min-w-0 flex-1 text-xs px-1.5 py-0.5 rounded border transition-colors focus:outline-none ${
+          saving
+            ? 'border-blue-300 bg-blue-50 text-blue-700'
+            : dirty
+            ? 'border-amber-300 bg-amber-50 text-gray-700'
+            : 'border-transparent bg-transparent text-gray-500 hover:border-gray-300 hover:bg-white focus:border-blue-400 focus:bg-white'
+        }`}
+      />
+      {value && !saving && (
+        <button
+          onMouseDown={(e) => {
+            e.preventDefault()
+            setValue('')
+            setDirty(true)
+            save('')
+          }}
+          onClick={(e) => e.stopPropagation()}
+          className="flex-shrink-0 opacity-0 group-hover/notes:opacity-100 p-0.5 text-gray-400 hover:text-gray-600 transition-opacity"
+          title="備考をクリア"
+        >
+          <X className="w-3 h-3" />
+        </button>
+      )}
+    </div>
   )
 }
 

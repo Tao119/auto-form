@@ -436,6 +436,9 @@ function MaintenanceSection() {
         WALチェックポイントとVACUUMを実行してディスク使用量を最適化します。
         大量削除後や定期的に実行することを推奨します。
       </p>
+      <p className="text-xs text-blue-600 bg-blue-50 rounded px-3 py-2 mb-4 border border-blue-100">
+        ✓ キューが完全に空になると自動的にメンテナンス（VACUUM + 90日超の送信済み/スキップ済みデータ削除）が実行されます。
+      </p>
 
       {/* Prune option */}
       <div className="mb-4 p-3 bg-gray-50 rounded border border-gray-200">

@@ -122,6 +122,8 @@ export default function HistoryPage() {
           label: run.label,
           industry: st?.industry ?? '',
           area: st?.area ?? '',
+          // Pass individual areas array when available (enables exact multi-area reproduction)
+          ...(st?.areas && st.areas.length > 1 ? { areas: st.areas } : {}),
           keywords: st?.keywords ?? [],
           maxResults: st?.maxResults ?? 50,
           // Preserve radius mode parameters if the original run used them

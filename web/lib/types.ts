@@ -19,6 +19,7 @@ export interface CompanyRow {
 export interface SearchTarget {
   industry: string
   area: string
+  areas?: string[]  // individual prefectures for multi-area runs (for accurate retry)
   keywords: string[]
   maxResults: number
   // Radius (map-based) mode fields — optional, only set when searchMode = 'radius'

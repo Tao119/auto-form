@@ -165,22 +165,28 @@ export function getQueueStatus(): {
       recovered++
     }
   }
-  // If we recovered any stale active jobs, try to start waiting jobs
+  // If we recovered any stale active jobs, kick off waiting jobs via the queue/start endpoint.
+  // We do NOT set status to 'active' here — markJobActive() is called inside the start endpoint
+  // after n8n is actually triggered. Setting status without triggering creates ghost active jobs.
   if (recovered > 0) {
+    writeQueue(data)
     const maxConcurrent = data.maxConcurrent || MAX_CONCURRENT
     const activeCount = data.jobs.filter((j) => j.status === 'active').length
     const slotsAvailable = maxConcurrent - activeCount
     if (slotsAvailable > 0) {
       const waiting = data.jobs.filter((j) => j.status === 'waiting')
         .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+      const base = process.env.INTERNAL_BASE_URL || 'http://localhost:3003'
       for (let i = 0; i < Math.min(slotsAvailable, waiting.length); i++) {
-        waiting[i].status = 'active'
-        waiting[i].startedAt = new Date().toISOString()
-        // Note: we don't actually trigger n8n here — the queue start API must be called separately.
-        // This just updates the queue state so the UI reflects reality.
+        const job = waiting[i]
+        // Fire-and-forget: trigger n8n for this waiting job
+        fetch(`${base}/api/queue/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ runId: job.runId, params: job.params }),
+        }).catch(() => {})
       }
     }
-    writeQueue(data)
   }
 
   // Re-read for up-to-date counts (after any recovery writes)
@@ -222,6 +228,12 @@ export function getQueuePosition(runId: string): number {
     .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
   const idx = waitingJobs.findIndex((j) => j.runId === runId)
   return idx === -1 ? 0 : idx + 1
+}
+
+/** Returns true when there are no active or waiting jobs — safe to run heavy maintenance. */
+export function isQueueIdle(): boolean {
+  const data = readQueue()
+  return data.jobs.every((j) => j.status !== 'active' && j.status !== 'waiting')
 }
 
 /** Prune old completed/failed jobs (keep last 200). */

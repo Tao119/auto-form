@@ -25,6 +25,26 @@ interface FetchResult {
   statusCode: number | null
 }
 
+function decodeBuffer(buf: Buffer, contentTypeHeader: string): string {
+  const ctCharset = contentTypeHeader.match(/charset=["']?([\w\-]+)/i)?.[1]?.toLowerCase() ?? ''
+  const previewLatin = buf.slice(0, 2000).toString('latin1')
+  const metaCharset = (
+    previewLatin.match(/<meta[^>]+charset=["']?([\w\-]+)/i)?.[1] ??
+    previewLatin.match(/charset=([\w\-]+)/i)?.[1] ??
+    ''
+  ).toLowerCase()
+  const detected = ctCharset || metaCharset
+  const normalise = (cs: string): string => {
+    if (/shift.?jis|sjis|x-sjis|cp932|windows-31j|ms_kanji|csshiftjis/i.test(cs)) return 'windows-31j'
+    if (/euc.?jp|x-euc|cseucpkdfmtjapanese/i.test(cs)) return 'euc-jp'
+    if (/iso.?2022.?jp/i.test(cs)) return 'iso-2022-jp'
+    return 'utf-8'
+  }
+  const charsetLabel = normalise(detected)
+  if (charsetLabel === 'utf-8') return buf.toString('utf8')
+  try { return new TextDecoder(charsetLabel).decode(buf) } catch { return buf.toString('utf8') }
+}
+
 function fetchUrl(rawUrl: string, timeoutMs: number): Promise<FetchResult> {
   return new Promise((resolve) => {
     let resolved = false
@@ -87,16 +107,17 @@ function fetchUrl(rawUrl: string, timeoutMs: number): Promise<FetchResult> {
         res.on('end', () => {
           clearTimeout(tid)
           const rawBuf = Buffer.concat(chunks)
-          const encoding = (res.headers['content-encoding'] || '').toLowerCase()
-          const finish = (html: string) => done({ url: rawUrl, html, error: null, statusCode: res.statusCode ?? null })
-          if (encoding === 'gzip') {
-            zlib.gunzip(rawBuf, (err, decoded) => finish(err ? rawBuf.toString('utf8') : decoded.toString('utf8')))
-          } else if (encoding === 'deflate') {
-            zlib.inflate(rawBuf, (err, decoded) => finish(err ? rawBuf.toString('utf8') : decoded.toString('utf8')))
-          } else if (encoding === 'br') {
-            zlib.brotliDecompress(rawBuf, (err, decoded) => finish(err ? rawBuf.toString('utf8') : decoded.toString('utf8')))
+          const contentEncoding = (res.headers['content-encoding'] || '').toLowerCase()
+          const contentType = (res.headers['content-type'] || '').toLowerCase()
+          const finish = (buf: Buffer) => done({ url: rawUrl, html: decodeBuffer(buf, contentType), error: null, statusCode: res.statusCode ?? null })
+          if (contentEncoding === 'gzip') {
+            zlib.gunzip(rawBuf, (err, decoded) => finish(err ? rawBuf : decoded))
+          } else if (contentEncoding === 'deflate') {
+            zlib.inflate(rawBuf, (err, decoded) => finish(err ? rawBuf : decoded))
+          } else if (contentEncoding === 'br') {
+            zlib.brotliDecompress(rawBuf, (err, decoded) => finish(err ? rawBuf : decoded))
           } else {
-            finish(rawBuf.toString('utf8'))
+            finish(rawBuf)
           }
         })
         res.on('error', (e) => {
