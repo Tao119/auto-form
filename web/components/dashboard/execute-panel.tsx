@@ -2,9 +2,10 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import dynamic from 'next/dynamic'
-import { Play, Loader2, CheckCircle2, XCircle, ChevronDown, Plus, FolderOpen, Database, X, Map, List, Hash, ExternalLink, Square } from 'lucide-react'
+import { Play, Loader2, CheckCircle2, XCircle, ChevronDown, Plus, FolderOpen, Database, X, Map, List, Hash, ExternalLink, Square, Sparkles, FlaskConical } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import type { Preset, Project, SearchMode } from '@/lib/types'
+import { estimateCost, getTestCity } from '@/lib/area-data'
 import { ProjectCreateModal } from '@/components/modals/project-create-modal'
 import type { MapPickerValue } from './map-picker'
 
@@ -108,6 +109,14 @@ export default function ExecutePanel() {
   const [canceling, setCanceling] = useState(false)
   const presetDropdownRef = useRef<HTMLDivElement>(null)
 
+  // AI keyword generation
+  const [keywords, setKeywords] = useState<string[]>([])
+  const [keywordsLoading, setKeywordsLoading] = useState(false)
+  const [kwInput, setKwInput] = useState('')
+
+  // Test mode: runs only the representative city of the first selected prefecture
+  const [testMode, setTestMode] = useState(false)
+
   // Track when the first item appeared (for items/min rate calculation)
   const firstItemTimeRef = useRef<number | null>(null)
   const prevLiveCountRef = useRef<number>(0)
@@ -126,6 +135,7 @@ export default function ExecutePanel() {
     if (s.customIndustry) setCustomIndustry(s.customIndustry)
     if (Array.isArray(s.selectedAreas) && s.selectedAreas.length > 0) setSelectedAreas(s.selectedAreas)
     if (s.maxResults !== undefined) setMaxResults(s.maxResults)
+    if ((s as { testMode?: boolean }).testMode !== undefined) setTestMode(!!(s as { testMode?: boolean }).testMode)
     setSettingsLoaded(true)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -133,8 +143,35 @@ export default function ExecutePanel() {
   // Persist settings whenever they change (after initial load)
   useEffect(() => {
     if (!_settingsLoaded) return
-    savePanelSettings({ searchMode, industry, customIndustry, selectedAreas, maxResults, selectedProjectId })
-  }, [_settingsLoaded, searchMode, industry, customIndustry, selectedAreas, maxResults, selectedProjectId])
+    savePanelSettings({ searchMode, industry, customIndustry, selectedAreas, maxResults, selectedProjectId, testMode })
+  }, [_settingsLoaded, searchMode, industry, customIndustry, selectedAreas, maxResults, selectedProjectId, testMode])
+
+  // Fetch AI keyword suggestions whenever the industry changes (debounced 600ms)
+  useEffect(() => {
+    if (!actualIndustry) return
+    // Immediately seed with static fallback so the field is never empty
+    setKeywords(KEYWORDS_MAP[actualIndustry] ?? [actualIndustry])
+    setKeywordsLoading(true)
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch('/api/ai/keywords', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ industry: actualIndustry }),
+        })
+        const data = await res.json()
+        if (data.success && Array.isArray(data.keywords) && data.keywords.length > 0) {
+          setKeywords(data.keywords)
+        }
+      } catch {
+        // keep static fallback on error
+      } finally {
+        setKeywordsLoading(false)
+      }
+    }, 600)
+    return () => { clearTimeout(t); setKeywordsLoading(false) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [actualIndustry])
 
   // Close area dropdown on outside click
   useEffect(() => {
@@ -278,7 +315,11 @@ export default function ExecutePanel() {
     firstItemTimeRef.current = null
     prevLiveCountRef.current = 0
 
-    const keywords = KEYWORDS_MAP[actualIndustry] || [actualIndustry]
+    const activeKeywords = keywords.length > 0 ? keywords : (KEYWORDS_MAP[actualIndustry] ?? [actualIndustry])
+    // In test mode, replace the selected area with the representative city of the first prefecture
+    const effectiveAreas = testMode
+      ? [getTestCity(selectedAreas[0] ?? '')]
+      : selectedAreas
     const runIds: string[] = []
     const timestamp = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }).slice(0, 16)
 
@@ -300,7 +341,7 @@ export default function ExecutePanel() {
             label: runLabel,
             industry: actualIndustry,
             area: areaLabel,
-            keywords,
+            keywords: activeKeywords,
             maxResults,
             searchMode: 'radius',
             lat: mapValue.lat,
@@ -317,14 +358,17 @@ export default function ExecutePanel() {
       }
     } else {
       // Prefecture mode: single job covering all selected areas
+      // In test mode, effectiveAreas is a single representative city
       const runId = generateRunId()
       runIds.push(runId)
-      const areaLabel = selectedAreas.length === 1
-        ? selectedAreas[0]
-        : `${selectedAreas.slice(0, 2).join('・')}${selectedAreas.length > 2 ? ` 他${selectedAreas.length - 2}件` : ''}`
+      const areaLabel = testMode
+        ? `${effectiveAreas[0]} [テスト]`
+        : selectedAreas.length === 1
+          ? selectedAreas[0]
+          : `${selectedAreas.slice(0, 2).join('・')}${selectedAreas.length > 2 ? ` 他${selectedAreas.length - 2}件` : ''}`
       const runLabel = `${actualIndustry} / ${areaLabel} ${timestamp}`
 
-      setLog(`${selectedAreas.length > 1 ? `${selectedAreas.length} エリア（1セッション）` : selectedAreas[0]} をキューに追加中...`)
+      setLog(`${testMode ? `テスト: ${effectiveAreas[0]}` : selectedAreas.length > 1 ? `${selectedAreas.length} エリア（1セッション）` : selectedAreas[0]} をキューに追加中...`)
 
       try {
         const res = await fetch('/api/queue/execute', {
@@ -336,8 +380,8 @@ export default function ExecutePanel() {
             label: runLabel,
             industry: actualIndustry,
             area: areaLabel,
-            areas: selectedAreas,
-            keywords,
+            areas: effectiveAreas,
+            keywords: activeKeywords,
             maxResults,
           }),
         })
@@ -422,12 +466,12 @@ export default function ExecutePanel() {
     if (!name) return
     setSavingPreset(true)
     try {
-      const keywords = KEYWORDS_MAP[actualIndustry] || [actualIndustry]
+      const activeKeywords = keywords.length > 0 ? keywords : (KEYWORDS_MAP[actualIndustry] ?? [actualIndustry])
       const area = selectedAreas.length === 1 ? selectedAreas[0] : selectedAreas.join(',')
       await fetch('/api/config/presets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, searchTarget: { industry: actualIndustry, area, keywords, maxResults } }),
+        body: JSON.stringify({ name, searchTarget: { industry: actualIndustry, area, keywords: activeKeywords, maxResults } }),
       })
       const r = await fetch('/api/config/presets')
       const d = await r.json()
@@ -574,6 +618,7 @@ export default function ExecutePanel() {
       </div>
 
       {/* Search params */}
+      <div className="space-y-3">
       <div className={`grid gap-3 ${searchMode === 'prefecture' ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'}`}>
         {/* Industry */}
         <div>
@@ -730,7 +775,94 @@ export default function ExecutePanel() {
           )}
         </div>
         )}
+      </div>{/* end inner grid */}
+
+      {/* Keywords section — full width */}
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <label className="text-xs text-gray-500 flex items-center gap-1">
+            <Sparkles className="w-3 h-3" />
+            検索キーワード
+          </label>
+          {keywordsLoading
+            ? <span className="text-xs text-blue-400 flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" />AI生成中...</span>
+            : <span className="text-xs text-gray-400">{keywords.length}個</span>
+          }
+        </div>
+        <div className={`flex flex-wrap gap-1 min-h-[34px] bg-white border rounded px-2 py-1.5 transition-colors ${isRunning ? 'border-gray-200 opacity-60' : 'border-gray-300'}`}>
+          {keywords.map((kw) => (
+            <span key={kw} className="inline-flex items-center gap-0.5 bg-blue-50 text-blue-700 text-xs px-2 py-0.5 rounded border border-blue-100">
+              {kw}
+              {!isRunning && (
+                <button
+                  onClick={() => setKeywords((prev) => prev.filter((k) => k !== kw))}
+                  className="hover:text-blue-900 ml-0.5"
+                >
+                  <X className="w-2.5 h-2.5" />
+                </button>
+              )}
+            </span>
+          ))}
+          {!isRunning && (
+            <input
+              value={kwInput}
+              onChange={(e) => setKwInput(e.target.value)}
+              onKeyDown={(e) => {
+                if ((e.key === 'Enter' || e.key === ',') && kwInput.trim()) {
+                  e.preventDefault()
+                  const kw = kwInput.trim().replace(/,$/, '')
+                  if (kw && !keywords.includes(kw)) setKeywords((prev) => [...prev, kw])
+                  setKwInput('')
+                }
+                if (e.key === 'Backspace' && !kwInput && keywords.length > 0) {
+                  setKeywords((prev) => prev.slice(0, -1))
+                }
+              }}
+              placeholder={keywords.length === 0 ? 'キーワードを入力 (Enter確定)' : '+ 追加'}
+              className="text-xs outline-none flex-1 min-w-[80px] placeholder-gray-300"
+            />
+          )}
+        </div>
+        <p className="text-xs text-gray-400 mt-0.5">業種変更で自動再生成 · Enterで追加 · ×で削除</p>
       </div>
+
+      {/* Test mode + cost estimate (prefecture mode only) */}
+      {searchMode === 'prefecture' && (
+        <div className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded px-3 py-2">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => !isRunning && setTestMode((v) => !v)}
+              disabled={isRunning}
+              className={`flex items-center gap-1.5 text-xs font-medium rounded px-2 py-1 transition-colors ${
+                testMode
+                  ? 'bg-amber-400 text-white'
+                  : 'bg-white text-amber-700 border border-amber-300 hover:bg-amber-100'
+              }`}
+            >
+              <FlaskConical className="w-3 h-3" />
+              テストモード
+            </button>
+            {testMode && selectedAreas.length > 0 && (
+              <span className="text-xs text-amber-700">
+                → <span className="font-medium">{getTestCity(selectedAreas[0])}</span> のみ検索
+              </span>
+            )}
+          </div>
+          <div className="text-xs text-amber-800">
+            概算コスト:&nbsp;
+            <span className="font-semibold">
+              ${estimateCost(keywords.length, selectedAreas, testMode).toFixed(2)}
+            </span>
+            {!testMode && selectedAreas.length > 0 && (
+              <span className="text-amber-500 ml-1">
+                (テスト: ${estimateCost(keywords.length, selectedAreas.slice(0, 1), true).toFixed(3)})
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      </div>{/* end space-y-3 */}
 
       {/* MaxResults + Execute */}
       <div className="space-y-2">
@@ -759,6 +891,8 @@ export default function ExecutePanel() {
               <><Loader2 className="w-4 h-4 animate-spin" /> {status === 'queued' ? '待機中...' : '実行中...'}</>
             ) : searchMode === 'radius' ? (
               <><Play className="w-4 h-4" /> 実行開始</>
+            ) : testMode ? (
+              <><FlaskConical className="w-4 h-4" /> テスト実行</>
             ) : (
               <><Play className="w-4 h-4" />
                 {selectedAreas.length > 1
