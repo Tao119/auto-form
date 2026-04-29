@@ -2,11 +2,14 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getProject, deleteProject, getRunsForProject } from '@/lib/project-manager'
 import { getCompanyStats } from '@/lib/companies-db'
 
+export const dynamic = 'force-dynamic'
+
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const project = getProject(params.id)
     if (!project) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
-    const runs = getRunsForProject(params.id)
+    // Exclude child runs (parentRunId set) — they are internal and shown only via their batch parent
+    const runs = getRunsForProject(params.id).filter((r) => !r.parentRunId)
     // Single aggregation query instead of two COUNT queries
     const stats = getCompanyStats(params.id)
     return NextResponse.json({ success: true, data: { ...project, runs, totalCount: stats.total, formFoundCount: stats.formFoundCount } })

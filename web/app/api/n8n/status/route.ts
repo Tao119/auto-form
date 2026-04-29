@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getExecution } from '@/lib/n8n-client'
 
+export const dynamic = 'force-dynamic'
+
 export async function GET(req: NextRequest) {
   const executionId = req.nextUrl.searchParams.get('executionId')
   if (!executionId) {

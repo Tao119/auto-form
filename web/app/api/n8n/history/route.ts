@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { listExecutions } from '@/lib/n8n-client'
 
+export const dynamic = 'force-dynamic'
+
 export async function GET(req: NextRequest) {
   const limit = parseInt(req.nextUrl.searchParams.get('limit') || '30', 10)
 

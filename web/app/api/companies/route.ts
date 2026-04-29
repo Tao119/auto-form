@@ -3,6 +3,8 @@ import { getCompanies, addCompanies, updateCompany, batchUpdateStatus, batchUpda
 import type { CompanyInput } from '@/lib/companies-db'
 import { z } from 'zod'
 
+export const dynamic = 'force-dynamic'
+
 // GET /api/companies?projectId=...&runId=...&industry=...&area=...
 // Returns filtered company list with total count
 export async function GET(req: NextRequest) {

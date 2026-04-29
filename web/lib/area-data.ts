@@ -122,13 +122,14 @@ export function getTestCity(pref: string): string {
   return PREF_TEST_CITY[pref] ?? pref
 }
 
-/** キーワード数・都道府県リスト・テストモードから概算コストを計算する */
-export function estimateCost(kwCount: number, prefs: string[], testMode: boolean): number {
+/** キーワード数・都道府県リスト・テストモードから概算コストを計算する (CSE: $5/1000クエリ) */
+export function estimateCost(kwCount: number, prefs: string[], testMode: boolean, maxResults = 50): number {
   if (kwCount === 0 || prefs.length === 0) return 0
+  // CSE: 1クエリ10件、maxResults件取得に必要なページ数
+  const pagesPerQuery = Math.ceil(Math.min(maxResults, 100) / 10)
+  const costPerQuery = 0.005  // $5/1000クエリ
   if (testMode) {
-    // テストモード: 最初の1都道府県のみ、1サブエリアとして計算
-    return kwCount * 1 * 0.032
+    return kwCount * pagesPerQuery * costPerQuery
   }
-  const totalSubAreas = prefs.reduce((sum, p) => sum + getSubAreaCount(p), 0)
-  return kwCount * totalSubAreas * 0.032
+  return kwCount * prefs.length * pagesPerQuery * costPerQuery
 }

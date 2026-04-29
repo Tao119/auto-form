@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
-import { updateRunStatus } from '@/lib/project-manager'
+import { updateRunStatus, getProjectRun, rollupBatchRun } from '@/lib/project-manager'
 import { markJobDone, isQueueIdle } from '@/lib/run-queue'
 import { calcCostUsd } from '@/lib/n8n-sync'
-import { addCompanies } from '@/lib/companies-db'
+import { addCompanies, countCompanies } from '@/lib/companies-db'
 import type { CompanyInput } from '@/lib/companies-db'
 
 const ResultsSchema = z.object({
@@ -17,6 +17,7 @@ const ResultsSchema = z.object({
   elapsedMs:      z.number().int().min(0).optional(),
   avgMsPerItem:   z.number().int().min(0).optional(),
   subAreaCount:   z.number().int().min(0).optional(),
+  queryCount:     z.number().int().min(0).optional(),
 }).optional()
 
 // Strict company schema — reject malformed records before DB insert
@@ -60,21 +61,20 @@ export async function POST(
     const body = Schema.parse(await req.json())
     const { runId } = params
 
-    // コスト計算: Google Places API + OpenAI LLM の両方を合算する
-    // Places API: subAreaCount × 4kw × $0.032/request
-    // OpenAI GPT: tokensInput/tokensOutput から calcCostUsd で計算 (n8n LLM ノード使用時)
-    const PLACES_API_COST_PER_QUERY = 0.032
-    const PLACES_KW_COUNT = 4
+    // コスト計算: Google Custom Search API + OpenAI LLM の両方を合算する
+    // CSE: queryCount × $0.005/query ($5/1000クエリ)
+    // OpenAI GPT: tokensInput/tokensOutput から calcCostUsd で計算
+    const CSE_COST_PER_QUERY = 0.005
     let gptCostUsd = 0
-    let placesCostUsd = 0
+    let searchCostUsd = 0
     if (body.tokensInput !== undefined && body.tokensOutput !== undefined) {
       gptCostUsd = calcCostUsd(body.model ?? 'gpt-4o-mini', body.tokensInput, body.tokensOutput)
     }
-    const subAreaCount = body.results?.subAreaCount
-    if (subAreaCount !== undefined && subAreaCount > 0) {
-      placesCostUsd = subAreaCount * PLACES_KW_COUNT * PLACES_API_COST_PER_QUERY
+    const queryCount = body.results?.queryCount ?? body.results?.subAreaCount
+    if (queryCount !== undefined && queryCount > 0) {
+      searchCostUsd = queryCount * CSE_COST_PER_QUERY
     }
-    const totalCost = gptCostUsd + placesCostUsd
+    const totalCost = gptCostUsd + searchCostUsd
     const estimatedCostUsd = totalCost > 0 ? totalCost : undefined
 
     // Validate and filter company records
@@ -97,8 +97,11 @@ export async function POST(
       }
     }
 
-    // Use actual DB-added count as the authoritative itemsWritten
-    const itemsWritten = actualAdded > 0 ? actualAdded : (body.itemsWritten ?? body.results?.itemsWritten ?? 0)
+    // Use actual SQLite row count for this runId as the authoritative itemsWritten.
+    // This reflects dedup-after state: companies that were flagged as duplicates of other runs
+    // still land in DB under this runId, so the count matches what the results page shows.
+    const dbRunCount = body.companies?.length ? countCompanies({ runId }) : 0
+    const itemsWritten = dbRunCount > 0 ? dbRunCount : (body.itemsWritten ?? body.results?.itemsWritten ?? 0)
 
     updateRunStatus(runId, body.status, undefined, itemsWritten, {
       tokensInput: body.tokensInput,
@@ -109,6 +112,12 @@ export async function POST(
       results: body.results as any,
       error: body.status === 'error' ? (body.error ?? 'Unknown error') : undefined,
     })
+
+    // If this is a child run, roll up stats into the batch parent (idempotent once all done)
+    const completedRun = getProjectRun(runId)
+    if (completedRun?.parentRunId) {
+      rollupBatchRun(completedRun.parentRunId)
+    }
 
     // Trigger next queued job
     const next = markJobDone(runId, body.status === 'success' ? 'completed' : 'failed', body.error)

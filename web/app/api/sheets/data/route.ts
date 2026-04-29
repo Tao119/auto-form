@@ -3,6 +3,8 @@ import { getCompanies, countCompaniesAndFormCount, getDistinctValues } from '@/l
 import type { Company, CompanySortBy, CompanySortDir } from '@/lib/companies-db'
 import type { CompanyRow } from '@/lib/types'
 
+export const dynamic = 'force-dynamic'
+
 function toRow(c: Company): CompanyRow {
   return {
     id: c.id,
@@ -29,6 +31,8 @@ export async function GET(req: NextRequest) {
   const limit = Math.min(500, Math.max(1, parseInt(searchParams.get('limit') || '100', 10)))
   const projectId = searchParams.get('projectId') || undefined
   const runId = searchParams.get('runId') || undefined
+  const runIdsRaw = searchParams.get('runIds')
+  const runIds = runIdsRaw ? runIdsRaw.split(',').filter(Boolean) : undefined
 
   const sortBy = (searchParams.get('sortBy') || 'collectedAt') as CompanySortBy
   const sortDir = (searchParams.get('sortDir') === 'ASC' ? 'ASC' : 'DESC') as CompanySortDir
@@ -36,6 +40,7 @@ export async function GET(req: NextRequest) {
   const baseFilters = {
     projectId,
     runId,
+    runIds,
     industry:  searchParams.get('industry') || undefined,
     area:      searchParams.get('area') || undefined,
     status:    searchParams.get('status') || undefined,

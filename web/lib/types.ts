@@ -78,6 +78,7 @@ export interface Project {
   description?: string
   createdAt: string
   runIds: string[]    // ordered list of run IDs
+  sheetsId?: string   // Google Spreadsheet ID linked to this project
 }
 
 export interface ProjectRun {
@@ -101,6 +102,10 @@ export interface ProjectRun {
   queuePosition?: number  // 1-based position in waiting queue; undefined = not queued
   // Error info (populated when status = 'error')
   error?: string
+  // Batch run support: multi-area collection appears as one history entry
+  runType?: 'single' | 'batch' | 'child'  // batch=parent (visible), child=sub-run (hidden)
+  parentRunId?: string    // set on child runs; causes them to be hidden in history
+  childRunIds?: string[]  // set on batch parent runs
 }
 
 // ─── Queue types ──────────────────────────────────────────────
@@ -146,6 +151,7 @@ export interface N8nExecution {
 }
 
 export type SearchMode = 'prefecture' | 'radius'
+export type SearchProvider = 'serper' | 'places'
 
 export interface ExecuteParams {
   industry: string
@@ -155,6 +161,7 @@ export interface ExecuteParams {
   maxResults?: number
   projectId: string
   runId: string
+  searchProvider?: SearchProvider  // 'serper'（デフォルト）or 'places'
   // Radius (map-based) mode
   searchMode?: SearchMode
   lat?: number

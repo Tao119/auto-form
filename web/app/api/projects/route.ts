@@ -3,6 +3,8 @@ import { getProjects, createProject, getRunsForProject } from '@/lib/project-man
 import { getProjectsStats } from '@/lib/companies-db'
 import { z } from 'zod'
 
+export const dynamic = 'force-dynamic'
+
 export async function GET() {
   try {
     const projects = getProjects()

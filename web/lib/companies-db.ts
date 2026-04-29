@@ -51,6 +51,7 @@ export type CompanySortDir = 'ASC' | 'DESC'
 export interface CompanyFilters {
   projectId?: string
   runId?: string
+  runIds?: string[]  // filter by multiple run IDs (IN clause)
   industry?: string
   area?: string
   status?: string
@@ -286,46 +287,58 @@ function generateId(): string {
 export function getCompanies(filters?: CompanyFilters): Company[] {
   const db = getDb()
   const clauses: string[] = []
-  const params: Record<string, string | number> = {}
+  const namedParams: Record<string, string | number> = {}
+  const positionalValues: (string | number)[] = []
 
-  if (filters?.projectId) { clauses.push('projectId = @projectId'); params.projectId = filters.projectId }
-  if (filters?.runId)     { clauses.push('runId = @runId');         params.runId = filters.runId }
-  if (filters?.industry)  { clauses.push('industry = @industry');   params.industry = filters.industry }
-  if (filters?.area)      { clauses.push('area = @area');           params.area = filters.area }
-  if (filters?.status)    { clauses.push('status = @status');       params.status = filters.status }
-  if (filters?.formType)  { clauses.push('formType = @formType');   params.formType = filters.formType }
+  if (filters?.projectId) { clauses.push('projectId = ?'); positionalValues.push(filters.projectId) }
+  if (filters?.runId)     { clauses.push('runId = ?');     positionalValues.push(filters.runId) }
+  if (filters?.industry)  { clauses.push('industry = ?');  positionalValues.push(filters.industry) }
+  if (filters?.area)      { clauses.push('area = ?');      positionalValues.push(filters.area) }
+  if (filters?.status)    { clauses.push('status = ?');    positionalValues.push(filters.status) }
+  if (filters?.formType)  { clauses.push('formType = ?');  positionalValues.push(filters.formType) }
   if (filters?.search) {
     const q = `%${filters.search.toLowerCase()}%`
-    clauses.push('(LOWER(name) LIKE @search OR LOWER(hpUrl) LIKE @search OR LOWER(formUrl) LIKE @search OR LOWER(address) LIKE @search OR phone LIKE @search OR LOWER(email) LIKE @search OR LOWER(notes) LIKE @search)')
-    params.search = q
+    clauses.push('(LOWER(name) LIKE ? OR LOWER(hpUrl) LIKE ? OR LOWER(formUrl) LIKE ? OR LOWER(address) LIKE ? OR phone LIKE ? OR LOWER(email) LIKE ? OR LOWER(notes) LIKE ?)')
+    positionalValues.push(q, q, q, q, q, q, q)
   }
   if (filters?.hasForm === 'true')  clauses.push("formUrl != ''")
   if (filters?.hasForm === 'false') clauses.push("formUrl = ''")
   if (filters?.hasPhone === 'true') clauses.push("phone != ''")
   if (filters?.hasEmail === 'true') clauses.push("email != ''")
 
-  // IDs filter: uses positional params since IN clause doesn't work with named params
+  // IDs / runIds filters use IN clause (positional only — compatible with the rest now)
   const idsFilter = filters?.ids?.length ? filters.ids : null
+  const runIdsFilter = !filters?.runId && filters?.runIds?.length ? filters.runIds : null
 
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
-  const limitClause = filters?.limit !== undefined ? `LIMIT @limit OFFSET @offset` : ''
-  if (filters?.limit !== undefined) {
-    params.limit = filters.limit
-    params.offset = filters.offset ?? 0
-  }
 
   // Whitelist allowed sort columns to prevent SQL injection
   const ALLOWED_SORT: ReadonlySet<string> = new Set(['collectedAt', 'name', 'industry', 'area', 'status', 'formType'])
   const sortCol = filters?.sortBy && ALLOWED_SORT.has(filters.sortBy) ? filters.sortBy : 'collectedAt'
   const sortDir = filters?.sortDir === 'ASC' ? 'ASC' : 'DESC'
 
+  const limit  = filters?.limit  !== undefined ? filters.limit  : null
+  const offset = filters?.offset !== undefined ? filters.offset : 0
+  const limitClause = limit !== null ? `LIMIT ? OFFSET ?` : ''
+
   if (idsFilter) {
     const placeholders = idsFilter.map(() => '?').join(',')
     const idsWhere = clauses.length ? `${where} AND id IN (${placeholders})` : `WHERE id IN (${placeholders})`
-    return db.prepare(`SELECT * FROM companies ${idsWhere} ORDER BY ${sortCol} ${sortDir}`).all([...Object.values(params), ...idsFilter]) as Company[]
+    return db.prepare(`SELECT * FROM companies ${idsWhere} ORDER BY ${sortCol} ${sortDir}`)
+      .all([...positionalValues, ...idsFilter]) as Company[]
   }
 
-  return db.prepare(`SELECT * FROM companies ${where} ORDER BY ${sortCol} ${sortDir} ${limitClause}`).all(params) as Company[]
+  if (runIdsFilter) {
+    const placeholders = runIdsFilter.map(() => '?').join(',')
+    const runIdsWhere = clauses.length ? `${where} AND runId IN (${placeholders})` : `WHERE runId IN (${placeholders})`
+    const allParams = [...positionalValues, ...runIdsFilter, ...(limit !== null ? [limit, offset] : [])]
+    return db.prepare(`SELECT * FROM companies ${runIdsWhere} ORDER BY ${sortCol} ${sortDir} ${limitClause}`)
+      .all(allParams) as Company[]
+  }
+
+  const allParams = [...positionalValues, ...(limit !== null ? [limit, offset] : [])]
+  return db.prepare(`SELECT * FROM companies ${where} ORDER BY ${sortCol} ${sortDir} ${limitClause}`)
+    .all(allParams.length ? allParams : namedParams) as Company[]
 }
 
 export function countCompanies(filters?: Omit<CompanyFilters, 'limit' | 'offset'>): number {
@@ -368,33 +381,42 @@ export function countCompaniesAndFormCount(
 ): { total: number; formCount: number; phoneCount: number; emailCount: number } {
   const db = getDb()
   const clauses: string[] = []
-  const params: Record<string, string> = {}
+  const positionalValues: (string | number)[] = []
 
-  if (filters?.projectId) { clauses.push('projectId = @projectId'); params.projectId = filters.projectId }
-  if (filters?.runId)     { clauses.push('runId = @runId');         params.runId = filters.runId }
-  if (filters?.industry)  { clauses.push('industry = @industry');   params.industry = filters.industry }
-  if (filters?.area)      { clauses.push('area = @area');           params.area = filters.area }
-  if (filters?.status)    { clauses.push('status = @status');       params.status = filters.status }
-  if (filters?.formType)  { clauses.push('formType = @formType');   params.formType = filters.formType }
+  if (filters?.projectId) { clauses.push('projectId = ?'); positionalValues.push(filters.projectId) }
+  if (filters?.runId)     { clauses.push('runId = ?');     positionalValues.push(filters.runId) }
+  if (filters?.industry)  { clauses.push('industry = ?');  positionalValues.push(filters.industry) }
+  if (filters?.area)      { clauses.push('area = ?');      positionalValues.push(filters.area) }
+  if (filters?.status)    { clauses.push('status = ?');    positionalValues.push(filters.status) }
+  if (filters?.formType)  { clauses.push('formType = ?');  positionalValues.push(filters.formType) }
   if (filters?.search) {
     const q = `%${filters.search.toLowerCase()}%`
-    clauses.push('(LOWER(name) LIKE @search OR LOWER(hpUrl) LIKE @search OR LOWER(formUrl) LIKE @search OR LOWER(address) LIKE @search OR phone LIKE @search OR LOWER(email) LIKE @search OR LOWER(notes) LIKE @search)')
-    params.search = q
+    clauses.push('(LOWER(name) LIKE ? OR LOWER(hpUrl) LIKE ? OR LOWER(formUrl) LIKE ? OR LOWER(address) LIKE ? OR phone LIKE ? OR LOWER(email) LIKE ? OR LOWER(notes) LIKE ?)')
+    positionalValues.push(q, q, q, q, q, q, q)
   }
   if (filters?.hasForm === 'true')  clauses.push("formUrl != ''")
   if (filters?.hasForm === 'false') clauses.push("formUrl = ''")
   if (filters?.hasPhone === 'true') clauses.push("phone != ''")
   if (filters?.hasEmail === 'true') clauses.push("email != ''")
 
+  const runIdsFilter = !filters?.runId && filters?.runIds?.length ? filters.runIds : null
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
+
+  let finalWhere = where
+  if (runIdsFilter) {
+    const placeholders = runIdsFilter.map(() => '?').join(',')
+    finalWhere = clauses.length ? `${where} AND runId IN (${placeholders})` : `WHERE runId IN (${placeholders})`
+    positionalValues.push(...runIdsFilter)
+  }
+
   const row = db.prepare(`
-    SELECT
-      COUNT(*) as total,
-      SUM(CASE WHEN formUrl  != '' THEN 1 ELSE 0 END) as formCount,
-      SUM(CASE WHEN phone    != '' THEN 1 ELSE 0 END) as phoneCount,
-      SUM(CASE WHEN email    != '' THEN 1 ELSE 0 END) as emailCount
-    FROM companies ${where}
-  `).get(params) as { total: number; formCount: number; phoneCount: number; emailCount: number }
+      SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN formUrl  != '' THEN 1 ELSE 0 END) as formCount,
+        SUM(CASE WHEN phone    != '' THEN 1 ELSE 0 END) as phoneCount,
+        SUM(CASE WHEN email    != '' THEN 1 ELSE 0 END) as emailCount
+      FROM companies ${finalWhere}
+    `).get(positionalValues) as { total: number; formCount: number; phoneCount: number; emailCount: number }
 
   // When hasForm filter is 'false', no row can have a form URL — formCount is always 0
   return {

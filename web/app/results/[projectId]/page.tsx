@@ -5,7 +5,7 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import {
   ArrowLeft, Download, Search, RefreshCw, X,
   CheckCircle, XCircle, Clock, Play, FolderOpen, Copy, Check,
-  ChevronUp, ChevronDown, ChevronsUpDown,
+  ChevronUp, ChevronDown, ChevronsUpDown, Sheet, ExternalLink,
 } from 'lucide-react'
 import type { CompanyRow, Project, ProjectRun } from '@/lib/types'
 
@@ -103,6 +103,12 @@ export default function ProjectResultsPage() {
   const [retryingRunId, setRetryingRunId] = useState<string | null>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
 
+  // Google Sheets integration state
+  const [googleAuthed, setGoogleAuthed] = useState(false)
+  const [sheetsConnecting, setSheetsConnecting] = useState(false)
+  const [sheetsPushing, setSheetsPushing] = useState<string | null>(null) // 'all' | runId
+  const [sheetsMsg, setSheetsMsg] = useState('')
+
   // Restore persisted filters from localStorage on first mount.
   // URL param ?run= takes priority over localStorage (used when navigating from history page).
   useEffect(() => {
@@ -194,6 +200,24 @@ export default function ProjectResultsPage() {
       .finally(() => setProjLoading(false))
   }, [projectId])
 
+  // Check Google auth status on mount and handle OAuth callback params
+  useEffect(() => {
+    fetch('/api/google/status')
+      .then((r) => r.json())
+      .then((d) => setGoogleAuthed(d.authed))
+      .catch(() => {})
+    const sheetsAuthed = searchParams.get('sheets_authed')
+    const sheetsError = searchParams.get('sheets_error')
+    if (sheetsAuthed) {
+      setSheetsMsg('Googleアカウントと連携しました')
+      setTimeout(() => setSheetsMsg(''), 3000)
+    }
+    if (sheetsError) {
+      setError(`Google認証エラー: ${decodeURIComponent(sheetsError)}`)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
 
   const handleSort = useCallback((col: string) => {
     if (sortBy === col) {
@@ -211,9 +235,16 @@ export default function ProjectResultsPage() {
     setError('')
     try {
       const params = new URLSearchParams({ page: String(p), limit: '100', sortBy, sortDir })
-      // Always query by projectId so all runs' data is visible.
-      // selectedRunId is used only for tab highlighting and run stats — not as a data filter.
       params.set('projectId', projectId)
+      if (selectedRunId) {
+        // Batch parent: include parent + all child run IDs so data from all children is shown
+        const run = project?.runs.find((r) => r.id === selectedRunId) as (ProjectRun & { childRunIds?: string[] }) | undefined
+        if (run?.childRunIds?.length) {
+          params.set('runIds', [selectedRunId, ...run.childRunIds].join(','))
+        } else {
+          params.set('runId', selectedRunId)
+        }
+      }
       if (filters.industry) params.set('industry', filters.industry)
       if (filters.area) params.set('area', filters.area)
       if (filters.status) params.set('status', filters.status)
@@ -245,7 +276,7 @@ export default function ProjectResultsPage() {
     } finally {
       setLoading(false)
     }
-  }, [projectId, filters.industry, filters.area, filters.status, filters.formType, filters.hasForm, filters.hasPhone, filters.hasEmail, debouncedSearch, sortBy, sortDir])
+  }, [projectId, project, selectedRunId, filters.industry, filters.area, filters.status, filters.formType, filters.hasForm, filters.hasPhone, filters.hasEmail, debouncedSearch, sortBy, sortDir])
 
   useEffect(() => { fetchData(1) }, [fetchData])
 
@@ -272,6 +303,54 @@ export default function ProjectResultsPage() {
     }, 8000)
     return () => clearInterval(t)
   }, [project, page, refreshProject, fetchData])
+
+  const handleSheetsConnect = async () => {
+    setSheetsConnecting(true)
+    try {
+      const res = await fetch('/api/sheets/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        refreshProject()
+        setSheetsMsg(data.created ? 'スプレッドシートを作成しました' : 'スプレッドシートを接続しました')
+        setTimeout(() => setSheetsMsg(''), 3000)
+      } else {
+        setError(data.error || 'スプレッドシート作成失敗')
+      }
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setSheetsConnecting(false)
+    }
+  }
+
+  const handleSheetsPush = async (runId?: string) => {
+    const key = runId ?? 'all'
+    setSheetsPushing(key)
+    try {
+      const body: Record<string, string> = { projectId }
+      if (runId) body.runId = runId
+      const res = await fetch('/api/sheets/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      if (data.success) {
+        setSheetsMsg(`スプレッドシートに ${data.totalWritten} 件を書き込みました`)
+        setTimeout(() => setSheetsMsg(''), 3000)
+      } else {
+        setError(data.error || 'スプレッドシート書き込み失敗')
+      }
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setSheetsPushing(null)
+    }
+  }
 
   const handleExport = async () => {
     setExporting(true)
@@ -526,7 +605,7 @@ export default function ProjectResultsPage() {
             )}
           </div>
         </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
           <button
             onClick={() => fetchData(page)}
             disabled={loading}
@@ -535,6 +614,48 @@ export default function ProjectResultsPage() {
             <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
             更新
           </button>
+          {/* Google Sheets integration */}
+          {!googleAuthed ? (
+            <a
+              href={`/api/google/authorize?projectId=${projectId}`}
+              className="flex items-center gap-1 text-xs border border-gray-300 text-gray-600 hover:border-gray-400 hover:text-gray-800 rounded px-2 py-1.5 transition-colors bg-white"
+            >
+              <Sheet className="w-3 h-3" />
+              Googleでログイン
+            </a>
+          ) : !project?.sheetsId ? (
+            <button
+              onClick={handleSheetsConnect}
+              disabled={sheetsConnecting}
+              className="flex items-center gap-1 text-xs border border-green-400 text-green-700 hover:bg-green-50 disabled:opacity-50 rounded px-2 py-1.5 transition-colors bg-white"
+            >
+              <Sheet className="w-3 h-3" />
+              {sheetsConnecting ? '作成中...' : 'スプシ作成'}
+            </button>
+          ) : (
+            <div className="flex items-center gap-1">
+              <a
+                href={`https://docs.google.com/spreadsheets/d/${project.sheetsId}`}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-1 text-xs text-green-700 hover:text-green-900 border border-green-300 rounded px-2 py-1.5 bg-green-50 transition-colors"
+                title="スプレッドシートを開く"
+              >
+                <Sheet className="w-3 h-3" />
+                スプシ
+                <ExternalLink className="w-2.5 h-2.5" />
+              </a>
+              <button
+                onClick={() => handleSheetsPush()}
+                disabled={sheetsPushing !== null}
+                className="flex items-center gap-1 text-xs border border-green-400 text-green-700 hover:bg-green-50 disabled:opacity-50 rounded px-2 py-1.5 transition-colors bg-white"
+                title="全件タブを最新データで更新"
+              >
+                {sheetsPushing === 'all' ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Sheet className="w-3 h-3" />}
+                全件を出力
+              </button>
+            </div>
+          )}
           <button
             onClick={handleExport}
             disabled={exporting || loading}
@@ -560,7 +681,7 @@ export default function ProjectResultsPage() {
             >
               全ての実行
             </button>
-            {project.runs.map((run) => (
+            {project.runs.filter((run) => !(run as ProjectRun & { parentRunId?: string }).parentRunId).map((run) => (
               <div key={run.id} className="flex-shrink-0 flex items-center">
               <button
                 onClick={() => setSelectedRunId(run.id)}
@@ -585,6 +706,11 @@ export default function ProjectResultsPage() {
               >
                 <RunStatusDot status={run.status} />
                 <span className="truncate max-w-[160px]">{run.label}</span>
+                {(run as ProjectRun & { runType?: string; childRunIds?: string[] }).runType === 'batch' && (run as ProjectRun & { childRunIds?: string[] }).childRunIds && (
+                  <span className="text-[10px] opacity-60">
+                    [{(run as ProjectRun & { childRunIds?: string[] }).childRunIds!.length}都道府県]
+                  </span>
+                )}
                 {run.itemsWritten !== undefined && (
                   <span className="text-xs opacity-70">({run.itemsWritten}件)</span>
                 )}
@@ -618,6 +744,19 @@ export default function ProjectResultsPage() {
                   {retryingRunId === run.id
                     ? <RefreshCw className="w-3 h-3 animate-spin" />
                     : <RefreshCw className="w-3 h-3" />}
+                </button>
+              )}
+              {/* Per-run Sheets push button (only when spreadsheet is connected) */}
+              {project?.sheetsId && (run.status === 'success' || run.status === 'completed') && (
+                <button
+                  onClick={() => handleSheetsPush(run.id)}
+                  disabled={sheetsPushing !== null}
+                  className="ml-0.5 p-1 text-gray-400 hover:text-green-600 transition-colors disabled:opacity-50"
+                  title="このラン分をスプレッドシートに出力"
+                >
+                  {sheetsPushing === run.id
+                    ? <RefreshCw className="w-3 h-3 animate-spin" />
+                    : <Sheet className="w-3 h-3" />}
                 </button>
               )}
               </div>
@@ -859,6 +998,12 @@ export default function ProjectResultsPage() {
       {batchSuccessMsg && (
         <div className="bg-green-50 border border-green-200 rounded p-2 text-xs text-green-700">
           {batchSuccessMsg}
+        </div>
+      )}
+      {sheetsMsg && (
+        <div className="bg-green-50 border border-green-200 rounded p-2 text-xs text-green-700 flex items-center gap-1.5">
+          <Sheet className="w-3.5 h-3.5" />
+          {sheetsMsg}
         </div>
       )}
 

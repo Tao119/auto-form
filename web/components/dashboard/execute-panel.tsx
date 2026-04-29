@@ -1,15 +1,11 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import dynamic from 'next/dynamic'
-import { Play, Loader2, CheckCircle2, XCircle, ChevronDown, Plus, FolderOpen, Database, X, Map, List, Hash, ExternalLink, Square, Sparkles, FlaskConical } from 'lucide-react'
+import { Play, Loader2, CheckCircle2, XCircle, ChevronDown, Plus, FolderOpen, Database, X, Hash, ExternalLink, Square, Sparkles } from 'lucide-react'
 import { useRouter } from 'next/navigation'
-import type { Preset, Project, SearchMode } from '@/lib/types'
-import { estimateCost, getTestCity } from '@/lib/area-data'
+import type { Preset, Project, SearchProvider } from '@/lib/types'
+import { estimateCost } from '@/lib/area-data'
 import { ProjectCreateModal } from '@/components/modals/project-create-modal'
-import type { MapPickerValue } from './map-picker'
-
-const MapPicker = dynamic(() => import('./map-picker'), { ssr: false })
 
 const INDUSTRIES = ['美容室', 'ヘアサロン', 'エステサロン', '美容クリニック', '歯科医院', '整骨院', '中古車販売', 'その他']
 
@@ -24,14 +20,17 @@ const AREAS_BY_REGION: Record<string, string[]> = {
 
 const ALL_AREAS = Object.values(AREAS_BY_REGION).flat()
 
+// 実測データに基づく最適キーワード設定 (2026-04-19 検証済み)
+// 追加kwの限界効率が1kwの50%を下回る場合はkw数を増やさない
+// 整骨院1kw=91件/$ / 歯科2kw=48件/$ / 美容室1kw=40件/$
 const KEYWORDS_MAP: Record<string, string[]> = {
-  '美容室': ['美容室', 'ヘアサロン', '美容院'],
-  'ヘアサロン': ['ヘアサロン', '美容室', 'サロン'],
-  'エステサロン': ['エステサロン', 'エステ', 'フェイシャル'],
-  '美容クリニック': ['美容クリニック', '美容外科', '美容皮膚科'],
-  '歯科医院': ['歯科医院', '歯医者', 'デンタルクリニック'],
-  '整骨院': ['整骨院', '接骨院', '整体'],
-  '中古車販売': ['中古車販売', '中古車', 'カーディーラー'],
+  '美容室':      ['美容室'],
+  'ヘアサロン':  ['ヘアサロン'],
+  'エステサロン': ['エステサロン', '脱毛サロン'],
+  '美容クリニック': ['美容クリニック', '医療脱毛'],
+  '歯科医院':    ['歯科', '矯正歯科'],
+  '整骨院':      ['整骨院'],
+  '中古車販売':  ['中古車', '中古車販売'],
 }
 
 type Status = 'idle' | 'queued' | 'running' | 'success' | 'error'
@@ -48,13 +47,9 @@ const MAX_RESULTS_OPTIONS = [
   { label: '100件', value: 100 },
   { label: '200件', value: 200 },
   { label: '500件', value: 500 },
-  { label: '無制限', value: 0 },
+  { label: '無制限', value: 1000000 },
 ]
 
-const SEARCH_MODE_LABELS: Record<SearchMode, string> = {
-  prefecture: '都道府県',
-  radius: '地図指定',
-}
 
 function generateRunId() {
   return `run-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
@@ -63,7 +58,7 @@ function generateRunId() {
 const EP_STORAGE_KEY = 'execute_panel_settings'
 
 function loadPanelSettings(): {
-  searchMode?: SearchMode; industry?: string; customIndustry?: string
+  industry?: string; customIndustry?: string
   selectedAreas?: string[]; maxResults?: number; selectedProjectId?: string
 } {
   try {
@@ -80,13 +75,11 @@ export default function ExecutePanel() {
 
   // Load persisted settings once on mount
   const [_settingsLoaded, setSettingsLoaded] = useState(false)
-  const [searchMode, setSearchMode] = useState<SearchMode>('prefecture')
   const [industry, setIndustry] = useState('美容室')
   const [customIndustry, setCustomIndustry] = useState('')
   const [selectedAreas, setSelectedAreas] = useState<string[]>(['東京都'])
   const [areaDropdownOpen, setAreaDropdownOpen] = useState(false)
   const areaDropdownRef = useRef<HTMLDivElement>(null)
-  const [mapValue, setMapValue] = useState<MapPickerValue | null>(null)
 
   const [status, setStatus] = useState<Status>('idle')
   const [log, setLog] = useState('')
@@ -107,6 +100,7 @@ export default function ExecutePanel() {
   const [savingPreset, setSavingPreset] = useState(false)
   const [currentRunIds, setCurrentRunIds] = useState<string[]>([])
   const [canceling, setCanceling] = useState(false)
+  const [searchProvider, setSearchProvider] = useState<SearchProvider>('serper')
   const presetDropdownRef = useRef<HTMLDivElement>(null)
 
   // AI keyword generation
@@ -114,28 +108,21 @@ export default function ExecutePanel() {
   const [keywordsLoading, setKeywordsLoading] = useState(false)
   const [kwInput, setKwInput] = useState('')
 
-  // Test mode: runs only the representative city of the first selected prefecture
-  const [testMode, setTestMode] = useState(false)
-
   // Track when the first item appeared (for items/min rate calculation)
   const firstItemTimeRef = useRef<number | null>(null)
   const prevLiveCountRef = useRef<number>(0)
 
   const actualIndustry = industry === 'その他' ? customIndustry : industry
   const isRunning = status === 'running' || status === 'queued'
-  const canExecute = !isRunning && !!actualIndustry && !!selectedProjectId &&
-    (searchMode !== 'prefecture' || selectedAreas.length > 0) &&
-    (searchMode !== 'radius' || !!mapValue)
+  const canExecute = !isRunning && !!actualIndustry && !!selectedProjectId && selectedAreas.length > 0
 
   // Restore persisted settings on first mount
   useEffect(() => {
     const s = loadPanelSettings()
-    if (s.searchMode) setSearchMode(s.searchMode)
     if (s.industry) setIndustry(s.industry)
     if (s.customIndustry) setCustomIndustry(s.customIndustry)
     if (Array.isArray(s.selectedAreas) && s.selectedAreas.length > 0) setSelectedAreas(s.selectedAreas)
     if (s.maxResults !== undefined) setMaxResults(s.maxResults)
-    if ((s as { testMode?: boolean }).testMode !== undefined) setTestMode(!!(s as { testMode?: boolean }).testMode)
     setSettingsLoaded(true)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -143,8 +130,8 @@ export default function ExecutePanel() {
   // Persist settings whenever they change (after initial load)
   useEffect(() => {
     if (!_settingsLoaded) return
-    savePanelSettings({ searchMode, industry, customIndustry, selectedAreas, maxResults, selectedProjectId, testMode })
-  }, [_settingsLoaded, searchMode, industry, customIndustry, selectedAreas, maxResults, selectedProjectId, testMode])
+    savePanelSettings({ industry, customIndustry, selectedAreas, maxResults, selectedProjectId })
+  }, [_settingsLoaded, industry, customIndustry, selectedAreas, maxResults, selectedProjectId])
 
   // Fetch AI keyword suggestions whenever the industry changes (debounced 600ms)
   useEffect(() => {
@@ -303,9 +290,7 @@ export default function ExecutePanel() {
   }, [])
 
   const handleExecute = async () => {
-    if (!actualIndustry || !selectedProjectId) return
-    if (searchMode === 'prefecture' && selectedAreas.length === 0) return
-    if (searchMode === 'radius' && !mapValue) return
+    if (!actualIndustry || !selectedProjectId || selectedAreas.length === 0) return
 
     setStatus('running')
     setItemsWritten(0)
@@ -316,59 +301,22 @@ export default function ExecutePanel() {
     prevLiveCountRef.current = 0
 
     const activeKeywords = keywords.length > 0 ? keywords : (KEYWORDS_MAP[actualIndustry] ?? [actualIndustry])
-    // In test mode, replace the selected area with the representative city of the first prefecture
-    const effectiveAreas = testMode
-      ? [getTestCity(selectedAreas[0] ?? '')]
-      : selectedAreas
+    const effectiveAreas = selectedAreas
     const runIds: string[] = []
     const timestamp = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }).slice(0, 16)
 
-    if (searchMode === 'radius' && mapValue) {
-      // Single job for map-based radius search
-      setLog('地図指定エリアをキューに追加中...')
+    {
+      // Prefecture mode: single area → single job; multiple areas → batch (parent + child runs)
       const runId = generateRunId()
-      runIds.push(runId)
-      const areaLabel = mapValue.label || `${mapValue.lat.toFixed(3)},${mapValue.lng.toFixed(3)}`
-      const runLabel = `${actualIndustry} / ${areaLabel} 半径${mapValue.radiusKm}km ${timestamp}`
-
-      try {
-        const res = await fetch('/api/queue/execute', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            runId,
-            projectId: selectedProjectId,
-            label: runLabel,
-            industry: actualIndustry,
-            area: areaLabel,
-            keywords: activeKeywords,
-            maxResults,
-            searchMode: 'radius',
-            lat: mapValue.lat,
-            lng: mapValue.lng,
-            radiusKm: mapValue.radiusKm,
-          }),
-        })
-        const data = await res.json()
-        if (!data.success) {
-          setLog(`キュー追加失敗: ${data.error}`)
-        }
-      } catch (e) {
-        setLog(`エラー: ${String(e)}`)
-      }
-    } else {
-      // Prefecture mode: single job covering all selected areas
-      // In test mode, effectiveAreas is a single representative city
-      const runId = generateRunId()
-      runIds.push(runId)
-      const areaLabel = testMode
-        ? `${effectiveAreas[0]} [テスト]`
-        : selectedAreas.length === 1
-          ? selectedAreas[0]
-          : `${selectedAreas.slice(0, 2).join('・')}${selectedAreas.length > 2 ? ` 他${selectedAreas.length - 2}件` : ''}`
+      const areaLabel = selectedAreas.length === 1
+        ? selectedAreas[0]
+        : `${selectedAreas.slice(0, 2).join('・')}${selectedAreas.length > 2 ? ` 他${selectedAreas.length - 2}件` : ''}`
       const runLabel = `${actualIndustry} / ${areaLabel} ${timestamp}`
 
-      setLog(`${testMode ? `テスト: ${effectiveAreas[0]}` : selectedAreas.length > 1 ? `${selectedAreas.length} エリア（1セッション）` : selectedAreas[0]} をキューに追加中...`)
+      const logMsg = effectiveAreas.length > 1
+        ? `${effectiveAreas.length} エリア（バッチ実行）`
+        : effectiveAreas[0]
+      setLog(`${logMsg} をキューに追加中...`)
 
       try {
         const res = await fetch('/api/queue/execute', {
@@ -383,14 +331,22 @@ export default function ExecutePanel() {
             areas: effectiveAreas,
             keywords: activeKeywords,
             maxResults,
+            searchProvider,
           }),
         })
         const data = await res.json()
         if (!data.success) {
           setLog(`キュー追加失敗: ${data.error}`)
+        } else if (data.batch && Array.isArray(data.childRunIds)) {
+          // Batch mode: poll child runs; parent run tracks aggregated stats in history
+          runIds.push(...data.childRunIds)
+        } else {
+          // Single-area mode
+          runIds.push(runId)
         }
       } catch (e) {
         setLog(`エラー: ${String(e)}`)
+        runIds.push(runId)  // fallback so polling still starts
       }
     }
 
@@ -398,11 +354,15 @@ export default function ExecutePanel() {
     setBatchProgress({ ...progress })
     setCurrentRunIds([...runIds])
     setStatus('running')
-    setLog(`${runIds.length} エリアを実行開始しました`)
+    setLog(
+      runIds.length > 1
+        ? `${runIds.length} エリアのバッチ実行を開始しました`
+        : '実行開始しました'
+    )
 
     // Poll all runs in parallel
-    const polls = runIds.map((runId) =>
-      pollSingleRun(runId).then((result) => {
+    const polls = runIds.map((rId) =>
+      pollSingleRun(rId).then((result) => {
         progress.done++
         if (result === 'success') progress.success++
         else progress.error++
@@ -598,28 +558,9 @@ export default function ExecutePanel() {
         )}
       </div>
 
-      {/* Search mode toggle */}
-      <div className="flex items-center gap-1 bg-gray-100 rounded p-0.5 w-fit">
-        {(['prefecture', 'radius'] as SearchMode[]).map((mode) => (
-          <button
-            key={mode}
-            onClick={() => { if (!isRunning) setSearchMode(mode) }}
-            disabled={isRunning}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors ${
-              searchMode === mode
-                ? 'bg-white text-gray-900 shadow-sm'
-                : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            {mode === 'prefecture' ? <List className="w-3.5 h-3.5" /> : <Map className="w-3.5 h-3.5" />}
-            {SEARCH_MODE_LABELS[mode]}
-          </button>
-        ))}
-      </div>
-
       {/* Search params */}
       <div className="space-y-3">
-      <div className={`grid gap-3 ${searchMode === 'prefecture' ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'}`}>
+      <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
         {/* Industry */}
         <div>
           <label className="block text-xs text-gray-500 mb-1">業種</label>
@@ -642,20 +583,7 @@ export default function ExecutePanel() {
           )}
         </div>
 
-        {/* Map mode */}
-        {searchMode === 'radius' && (
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">調査エリア（地図で指定）</label>
-            <MapPicker
-              value={mapValue}
-              onChange={setMapValue}
-              disabled={isRunning}
-            />
-          </div>
-        )}
-
         {/* Prefecture multi-select */}
-        {searchMode === 'prefecture' && (
         <div ref={areaDropdownRef}>
           <div className="flex items-center justify-between mb-1">
             <label className="text-xs text-gray-500">エリア</label>
@@ -774,7 +702,6 @@ export default function ExecutePanel() {
             </div>
           )}
         </div>
-        )}
       </div>{/* end inner grid */}
 
       {/* Keywords section — full width */}
@@ -826,41 +753,42 @@ export default function ExecutePanel() {
         <p className="text-xs text-gray-400 mt-0.5">業種変更で自動再生成 · Enterで追加 · ×で削除</p>
       </div>
 
-      {/* Test mode + cost estimate (prefecture mode only) */}
-      {searchMode === 'prefecture' && (
-        <div className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded px-3 py-2">
-          <div className="flex items-center gap-2">
+      {/* Cost estimate + search provider */}
+      <div className="flex items-center justify-between bg-gray-50 border border-gray-200 rounded px-3 py-2">
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-gray-500">検索エンジン:</span>
             <button
-              onClick={() => !isRunning && setTestMode((v) => !v)}
+              type="button"
+              onClick={() => setSearchProvider('serper')}
               disabled={isRunning}
-              className={`flex items-center gap-1.5 text-xs font-medium rounded px-2 py-1 transition-colors ${
-                testMode
-                  ? 'bg-amber-400 text-white'
-                  : 'bg-white text-amber-700 border border-amber-300 hover:bg-amber-100'
+              className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+                searchProvider === 'serper'
+                  ? 'bg-blue-600 text-white border-blue-600'
+                  : 'bg-white text-gray-600 border-gray-300 hover:border-gray-400'
               }`}
             >
-              <FlaskConical className="w-3 h-3" />
-              テストモード
+              Serper
             </button>
-            {testMode && selectedAreas.length > 0 && (
-              <span className="text-xs text-amber-700">
-                → <span className="font-medium">{getTestCity(selectedAreas[0])}</span> のみ検索
-              </span>
-            )}
+            <button
+              type="button"
+              onClick={() => setSearchProvider('places')}
+              disabled={isRunning}
+              className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+                searchProvider === 'places'
+                  ? 'bg-blue-600 text-white border-blue-600'
+                  : 'bg-white text-gray-600 border-gray-300 hover:border-gray-400'
+              }`}
+            >
+              Google Places
+            </button>
           </div>
-          <div className="text-xs text-amber-800">
+          <div className="text-xs text-gray-700">
             概算コスト:&nbsp;
             <span className="font-semibold">
-              ${estimateCost(keywords.length, selectedAreas, testMode).toFixed(2)}
+              ${estimateCost(keywords.length, selectedAreas, false, maxResults).toFixed(2)}
             </span>
-            {!testMode && selectedAreas.length > 0 && (
-              <span className="text-amber-500 ml-1">
-                (テスト: ${estimateCost(keywords.length, selectedAreas.slice(0, 1), true).toFixed(3)})
-              </span>
-            )}
           </div>
         </div>
-      )}
 
       </div>{/* end space-y-3 */}
 
@@ -889,10 +817,6 @@ export default function ExecutePanel() {
           >
             {isRunning ? (
               <><Loader2 className="w-4 h-4 animate-spin" /> {status === 'queued' ? '待機中...' : '実行中...'}</>
-            ) : searchMode === 'radius' ? (
-              <><Play className="w-4 h-4" /> 実行開始</>
-            ) : testMode ? (
-              <><FlaskConical className="w-4 h-4" /> テスト実行</>
             ) : (
               <><Play className="w-4 h-4" />
                 {selectedAreas.length > 1

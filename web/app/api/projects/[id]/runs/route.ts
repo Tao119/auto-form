@@ -4,7 +4,7 @@ import { z } from 'zod'
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const runs = getRunsForProject(params.id)
+    const runs = getRunsForProject(params.id).filter((r) => !r.parentRunId)
     return NextResponse.json({ success: true, data: runs })
   } catch (e) {
     return NextResponse.json({ success: false, error: String(e) }, { status: 500 })

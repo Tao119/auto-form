@@ -4,6 +4,8 @@ import OpenAI from 'openai'
 
 const Schema = z.object({ industry: z.string().min(1).max(100) })
 
+const cache = new Map<string, string[]>()
+
 let _openai: OpenAI | null = null
 function getOpenAI() {
   if (!_openai && process.env.OPENAI_API_KEY) {
@@ -19,6 +21,10 @@ function getOpenAI() {
 export async function POST(req: NextRequest) {
   try {
     const { industry } = Schema.parse(await req.json())
+
+    const cached = cache.get(industry)
+    if (cached) return NextResponse.json({ success: true, keywords: cached })
+
     const openai = getOpenAI()
     if (!openai) {
       return NextResponse.json({ success: false, error: 'OpenAI API key not configured' }, { status: 500 })
@@ -33,16 +39,24 @@ export async function POST(req: NextRequest) {
         },
         {
           role: 'user',
-          content: `業種「${industry}」をGoogleマップで全国検索する際、漏れを最小化するための検索キーワードを最大8つ提案してください。
+          content: `業種「${industry}」をGoogleマップで検索するキーワードを提案してください。
 
-要件：
-- Googleマップの検索ボックスに直接入力する短い日本語キーワード（1〜4語）
-- 同業態でも異なる呼称・業態名・店舗タイプをカバーする（チェーン・個人・専門店など）
-- 類似しすぎるものは省く（例: 「美容室」と「ビューティーサロン」は重複）
-- 検索ヒット数が多い順に並べる
+【絶対ルール】配列の要素数は最大3個。3個を超えることは禁止。
 
-以下のJSON形式のみ返す：
-{"keywords": ["kw1", "kw2", "kw3"]}`,
+背景知識：
+- Google Places APIは1クエリあたり最大20件しか返さない
+- 類語（美容室/ヘアサロン/美容院など）は同一店舗の重複ヒットになるだけ。コスト効率が悪化する
+- 実測: 美容室1kw=40件/$ vs 8kw=14件/$（多いほど悪化）
+
+選定基準：
+- メインキーワード1個（最大検索ボリューム）は必須
+- 2個目以降は「異なる専門業態で検索結果が実際に変わる」場合のみ追加
+  - 追加OK例: 歯科+矯正歯科（異なる医院が上位に出る）
+  - 追加NG例: 美容室+ヘアサロン+美容院（ほぼ同一店舗）
+- 類語・同義語は絶対に追加しない
+
+JSON形式のみ返す（要素数1〜3）：
+{"keywords": ["kw1"]}`,
         },
       ],
       max_tokens: 150,
@@ -54,7 +68,7 @@ export async function POST(req: NextRequest) {
     try {
       const parsed = JSON.parse(resp.choices[0]?.message?.content ?? '{}')
       if (Array.isArray(parsed.keywords)) {
-        keywords = parsed.keywords.filter((k: unknown) => typeof k === 'string' && k.trim()).slice(0, 8)
+        keywords = parsed.keywords.filter((k: unknown) => typeof k === 'string' && k.trim()).slice(0, 3)
       }
     } catch {
       keywords = [industry]
@@ -62,6 +76,7 @@ export async function POST(req: NextRequest) {
 
     if (keywords.length === 0) keywords = [industry]
 
+    cache.set(industry, keywords)
     return NextResponse.json({ success: true, keywords })
   } catch (e) {
     return NextResponse.json({ success: false, error: String(e) }, { status: 400 })

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getPresets, savePreset, deletePreset } from '@/lib/preset-manager'
 
+export const dynamic = 'force-dynamic'
+
 export async function GET() {
   try {
     const presets = getPresets()

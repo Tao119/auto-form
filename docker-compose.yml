@@ -34,6 +34,8 @@ services:
       - EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=true
       # Disable task runner to avoid race condition on restart
       - N8N_RUNNERS_ENABLED=false
+      # HTTP Request node timeout (default 10s is too short for bulk search)
+      - HTTP_TIMEOUT_MS=600000
     env_file:
       - .env
     volumes:
@@ -83,8 +85,12 @@ services:
       - MAX_CONCURRENT_RUNS=${MAX_CONCURRENT_RUNS:-3}
       # Internal URL used by queue/complete to trigger next job
       - INTERNAL_BASE_URL=http://web:3000
+      - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY}
+    env_file:
+      - .env
     volumes:
       - ./config:/app/config:ro
+      - ./web/data:/app/data
     depends_on:
       - n8n
     networks:

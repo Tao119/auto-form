@@ -62,6 +62,15 @@ export function createProject(name: string, description?: string): Project {
   return project
 }
 
+export function linkSheets(projectId: string, sheetsId: string): Project {
+  const data = readData()
+  const project = data.projects.find((p) => p.id === projectId)
+  if (!project) throw new Error(`Project ${projectId} not found`)
+  project.sheetsId = sheetsId
+  writeData(data)
+  return project
+}
+
 export function deleteProject(id: string): void {
   const data = readData()
   const project = data.projects.find((p) => p.id === id)
@@ -120,6 +129,104 @@ export function addRunToProject(
   }
   writeData(data)
   return projectRun
+}
+
+/**
+ * Create a batch parent run + N child runs (one per area) atomically.
+ * The parent run is added to the project's runIds; children are NOT
+ * (they are hidden from history via parentRunId).
+ */
+export function addBatchRunToProject(
+  projectId: string,
+  parent: { id: string; label: string; searchTarget: SearchTarget },
+  children: { id: string; area: string; label: string }[],
+): { parent: ProjectRun; children: ProjectRun[] } {
+  const data = readData()
+  const project = data.projects.find((p) => p.id === projectId)
+  if (!project) throw new Error(`Project ${projectId} not found`)
+
+  const childRuns: ProjectRun[] = children.map((c) => ({
+    id: c.id,
+    projectId,
+    label: c.label,
+    createdAt: new Date().toISOString(),
+    searchTarget: {
+      ...parent.searchTarget,
+      area: c.area,
+      areas: undefined,
+    },
+    status: 'pending' as const,
+    runType: 'child' as const,
+    parentRunId: parent.id,
+  }))
+
+  const parentRun: ProjectRun = {
+    id: parent.id,
+    projectId,
+    label: parent.label,
+    createdAt: new Date().toISOString(),
+    searchTarget: parent.searchTarget,
+    status: 'pending',
+    runType: 'batch',
+    childRunIds: children.map((c) => c.id),
+  }
+
+  data.runs.push(parentRun, ...childRuns)
+  if (!project.runIds.includes(parent.id)) project.runIds.push(parent.id)
+  writeData(data)
+
+  return { parent: parentRun, children: childRuns }
+}
+
+/**
+ * Roll up child run stats into the parent batch run.
+ * Only completes the parent once all children are in a terminal status.
+ * Safe to call multiple times (idempotent once parent is terminal).
+ */
+export function rollupBatchRun(parentRunId: string): void {
+  const data = readData()
+  const parent = data.runs.find((r) => r.id === parentRunId)
+  // parentRunId must exist and be a batch run. Never re-rollup a parent that's already fully settled
+  // (both status AND completedAt set by a prior rollup invocation).
+  if (!parent || !parent.childRunIds) return
+  // Allow re-rollup if parent was prematurely marked terminal by something other than rollup
+  // (e.g. queue auto-start set it 'success' before all children finished).
+  // The check: only skip if completedAt was already set by a prior complete rollup.
+  // We detect a "real" rollup completion by checking that itemsWritten matches the child sum.
+  const children = data.runs.filter((r) => parent.childRunIds!.includes(r.id))
+  const allTerminal = children.every(
+    (c) => c.status === 'success' || c.status === 'completed' || c.status === 'error',
+  )
+  if (!allTerminal) return
+  // Already correctly rolled up: all children terminal and sum matches
+  const currentSum = children.reduce((s, c) => s + (c.itemsWritten ?? 0), 0)
+  if (
+    (parent.status === 'success' || parent.status === 'completed') &&
+    parent.itemsWritten === currentSum &&
+    parent.completedAt
+  ) return
+
+  const totalItems     = children.reduce((s, c) => s + (c.itemsWritten ?? 0), 0)
+  const totalCost      = children.reduce((s, c) => s + (c.estimatedCostUsd ?? 0), 0)
+  const totalTokIn     = children.reduce((s, c) => s + (c.tokensInput ?? 0), 0)
+  const totalTokOut    = children.reduce((s, c) => s + (c.tokensOutput ?? 0), 0)
+  const totalRawSearch = children.reduce((s, c) => s + (c.rawSearchCount ?? 0), 0)
+  const hasSuccess     = children.some((c) => c.status === 'success' || c.status === 'completed')
+
+  parent.status          = hasSuccess ? 'success' : 'error'
+  parent.itemsWritten    = totalItems
+  parent.completedAt     = new Date().toISOString()
+  if (totalCost > 0)      parent.estimatedCostUsd = totalCost
+  if (totalTokIn > 0)     parent.tokensInput      = totalTokIn
+  if (totalTokOut > 0)    parent.tokensOutput     = totalTokOut
+  if (totalRawSearch > 0) parent.rawSearchCount   = totalRawSearch
+
+  writeData(data)
+}
+
+/** Return all child runs for a given batch parent run ID. */
+export function getChildRuns(parentRunId: string): ProjectRun[] {
+  return readData().runs.filter((r) => r.parentRunId === parentRunId)
 }
 
 export interface RunStatusUpdate {

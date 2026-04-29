@@ -3,6 +3,8 @@ import { getQueueStatus, MAX_CONCURRENT, setMaxConcurrent } from '@/lib/run-queu
 import { NextRequest } from 'next/server'
 import { z } from 'zod'
 
+export const dynamic = 'force-dynamic'
+
 /** GET /api/queue — キュー全体の状態を返す */
 export async function GET() {
   try {
