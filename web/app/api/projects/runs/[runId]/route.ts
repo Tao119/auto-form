@@ -6,11 +6,11 @@ import { z } from 'zod'
 
 export async function GET(_req: NextRequest, { params }: { params: { runId: string } }) {
   try {
-    const run = getProjectRun(params.runId)
+    const run = await getProjectRun(params.runId)
     if (!run) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
     // Attach live queue position so the execute panel can show correct status
     const queuePosition = (run.status === 'pending' || run.status === 'running')
-      ? getQueuePosition(params.runId)
+      ? await getQueuePosition(params.runId)
       : 0
     return NextResponse.json({ success: true, data: { ...run, queuePosition } })
   } catch (e) {
@@ -32,7 +32,7 @@ const PatchSchema = z.object({
 export async function PATCH(req: NextRequest, { params }: { params: { runId: string } }) {
   try {
     const body = PatchSchema.parse(await req.json())
-    updateRunStatus(params.runId, body.status, body.n8nExecutionId, body.itemsWritten, {
+    await updateRunStatus(params.runId, body.status, body.n8nExecutionId, body.itemsWritten, {
       tokensInput: body.tokensInput,
       tokensOutput: body.tokensOutput,
       estimatedCostUsd: body.estimatedCostUsd,
@@ -44,7 +44,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { runId: str
     // jobs are not blocked. markJobDone is idempotent — safe to call even if n8n also
     // completes the job afterwards.
     if (body.status === 'error') {
-      const next = markJobDone(params.runId, 'failed', 'canceled_by_user')
+      const next = await markJobDone(params.runId, 'failed', 'canceled_by_user')
       if (next) {
         const base = process.env.INTERNAL_BASE_URL || 'http://localhost:3003'
         fetch(`${base}/api/queue/start`, {
@@ -55,7 +55,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { runId: str
       }
     }
 
-    const run = getProjectRun(params.runId)
+    const run = await getProjectRun(params.runId)
     return NextResponse.json({ success: true, data: run })
   } catch (e) {
     return NextResponse.json({ success: false, error: String(e) }, { status: 400 })
@@ -69,13 +69,13 @@ export async function PATCH(req: NextRequest, { params }: { params: { runId: str
  */
 export async function DELETE(_req: NextRequest, { params }: { params: { runId: string } }) {
   try {
-    const run = getProjectRun(params.runId)
+    const run = await getProjectRun(params.runId)
     if (!run) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
     if (run.status === 'running' || run.status === 'pending') {
       return NextResponse.json({ success: false, error: '実行中のランは削除できません。先にキャンセルしてください。' }, { status: 409 })
     }
-    const companiesRemoved = removeByRunId(params.runId)
-    deleteRun(params.runId)
+    const companiesRemoved = await removeByRunId(params.runId)
+    await deleteRun(params.runId)
     return NextResponse.json({ success: true, companiesRemoved })
   } catch (e) {
     return NextResponse.json({ success: false, error: String(e) }, { status: 500 })

@@ -1,200 +1,121 @@
-import fs from 'fs'
-import path from 'path'
-import type { QueueJob, QueueData, ExecuteParams } from './types'
+import getSql from './db'
+import type { QueueJob, ExecuteParams } from './types'
 import { updateRunStatus, expireStaleRuns, getProjectRun } from './project-manager'
-
-const DATA_DIR = path.join(process.cwd(), 'data')
-const QUEUE_FILE = path.join(DATA_DIR, 'queue.json')
 
 export const MAX_CONCURRENT = parseInt(process.env.MAX_CONCURRENT_RUNS || '3', 10)
 
-// ─── Startup recovery ─────────────────────────────────────────
-// Run once per process to reset any jobs that were 'active' when the server
-// last stopped (they will never receive their completion callback).
 let _startupRecoveryDone = false
 
-function recoverStaleActiveJobs(data: QueueData): void {
-  const stale = data.jobs.filter((j) => j.status === 'active')
-  if (stale.length === 0) return
+function rowToJob(r: Record<string, unknown>): QueueJob {
+  return {
+    id:          r.id as string,
+    runId:       r.run_id as string,
+    projectId:   r.project_id as string,
+    status:      r.status as QueueJob['status'],
+    params:      r.params as ExecuteParams,
+    createdAt:   r.created_at as string,
+    startedAt:   r.started_at as string | undefined,
+    completedAt: r.completed_at as string | undefined,
+    error:       r.error as string | undefined,
+  }
+}
 
-  for (const job of stale) {
-    // Before marking as failed, check if the run already succeeded.
-    // This handles hot-reload restarts where n8n called the completion callback
-    // just before (or just after) the server restarted — the run status in
-    // project-manager would already show 'success' in that case.
-    const existingRun = getProjectRun(job.runId)
+async function recoverStaleActiveJobs(): Promise<void> {
+  if (_startupRecoveryDone) return
+  _startupRecoveryDone = true
+  const sql = getSql()
+  const stale = await sql`SELECT * FROM queue_jobs WHERE status = 'active'`
+  for (const row of stale) {
+    const job = rowToJob(row)
+    const existingRun = await getProjectRun(job.runId)
     if (existingRun?.status === 'success') {
-      // Run completed successfully — just sync the queue job status
-      job.status = 'completed'
-      job.completedAt = job.completedAt || new Date().toISOString()
-      continue
-    }
-
-    job.status = 'failed'
-    job.completedAt = new Date().toISOString()
-    job.error = 'server_restart'
-    // Only update run status if it wasn't already resolved
-    if (existingRun && existingRun.status !== 'error') {
-      updateRunStatus(job.runId, 'error')
+      await sql`UPDATE queue_jobs SET status = 'completed', completed_at = ${new Date().toISOString()} WHERE id = ${job.id}`
+    } else {
+      await sql`UPDATE queue_jobs SET status = 'failed', completed_at = ${new Date().toISOString()}, error = 'server_restart' WHERE id = ${job.id}`
+      if (existingRun && existingRun.status !== 'error') {
+        await updateRunStatus(job.runId, 'error')
+      }
     }
   }
 }
 
-// ─── File I/O ─────────────────────────────────────────────────
-
-function readQueue(): QueueData {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true })
-  const blank: QueueData = { jobs: [], maxConcurrent: MAX_CONCURRENT }
-  if (!fs.existsSync(QUEUE_FILE)) {
-    fs.writeFileSync(QUEUE_FILE, JSON.stringify(blank, null, 2))
-    _startupRecoveryDone = true
-    return blank
-  }
-  let data: QueueData
-  try {
-    data = JSON.parse(fs.readFileSync(QUEUE_FILE, 'utf-8')) as QueueData
-    // Sanity check
-    if (!Array.isArray(data.jobs)) data = blank
-  } catch {
-    // Corrupted file — reset to blank (stale recovery runs next time)
-    data = blank
-  }
-  if (!_startupRecoveryDone) {
-    _startupRecoveryDone = true
-    recoverStaleActiveJobs(data)
-    writeQueue(data)
-  }
-  return data
-}
-
-function writeQueue(data: QueueData): void {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true })
-  const tmp = QUEUE_FILE + '.tmp'
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2))
-  fs.renameSync(tmp, QUEUE_FILE)
-}
-
-// ─── Public API ───────────────────────────────────────────────
-
-/** Add a job to the queue. Returns the job and whether it can start immediately. */
-export function enqueue(runId: string, projectId: string, params: ExecuteParams): {
+export async function enqueue(runId: string, projectId: string, params: ExecuteParams): Promise<{
   job: QueueJob
   canStart: boolean
   queuePosition: number
-} {
-  const data = readQueue()
-  const activeCount = data.jobs.filter((j) => j.status === 'active').length
-  const waitingCount = data.jobs.filter((j) => j.status === 'waiting').length
-  const canStart = activeCount < (data.maxConcurrent || MAX_CONCURRENT)
+}> {
+  await recoverStaleActiveJobs()
+  const sql = getSql()
+  const id = `job-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  const createdAt = new Date().toISOString()
 
-  const job: QueueJob = {
-    runId,
-    projectId,
-    params,
-    status: canStart ? 'active' : 'waiting',
-    createdAt: new Date().toISOString(),
-  }
+  const activeRows = await sql`SELECT COUNT(*)::int as cnt FROM queue_jobs WHERE status = 'active'`
+  const activeCount = activeRows[0].cnt as number
+  const canStart = activeCount < MAX_CONCURRENT
 
-  data.jobs.push(job)
-  writeQueue(data)
+  await sql`
+    INSERT INTO queue_jobs (id, run_id, project_id, status, params, created_at)
+    VALUES (${id}, ${runId}, ${projectId}, ${canStart ? 'active' : 'waiting'}, ${sql.json(params as unknown as Parameters<typeof sql.json>[0])}, ${createdAt})
+  `
+
+  const waitingRows = await sql`SELECT COUNT(*)::int as cnt FROM queue_jobs WHERE status = 'waiting'`
+  const waitingCount = (waitingRows[0].cnt as number)
 
   return {
-    job,
+    job: { id, runId, projectId, status: canStart ? 'active' : 'waiting', params, createdAt },
     canStart,
-    queuePosition: canStart ? 0 : waitingCount + 1,
+    queuePosition: canStart ? 0 : waitingCount,
   }
 }
 
-/** Mark a job as active (started). */
-export function markJobActive(runId: string): void {
-  const data = readQueue()
-  const job = data.jobs.find((j) => j.runId === runId)
-  if (job) {
-    job.status = 'active'
-    job.startedAt = new Date().toISOString()
-  }
-  writeQueue(data)
+export async function markJobActive(runId: string): Promise<void> {
+  const sql = getSql()
+  await sql`UPDATE queue_jobs SET status = 'active', started_at = ${new Date().toISOString()} WHERE run_id = ${runId} AND status = 'waiting'`
 }
 
-/** Mark a job as completed or failed, and return the next waiting job (if any).
- *  Safe to call multiple times — only advances the queue if the job was previously 'active'. */
-export function markJobDone(runId: string, status: 'completed' | 'failed', error?: string): QueueJob | undefined {
-  const data = readQueue()
-  const job = data.jobs.find((j) => j.runId === runId)
+export async function markJobDone(runId: string, status: 'completed' | 'failed', error?: string): Promise<QueueJob | undefined> {
+  const sql = getSql()
+  const result = await sql`
+    UPDATE queue_jobs SET
+      status       = ${status},
+      completed_at = ${new Date().toISOString()},
+      error        = ${error ?? null}
+    WHERE run_id = ${runId} AND status = 'active'
+  `
+  if (result.count === 0) return undefined
 
-  // Guard: only advance the queue when we're actually completing an active job.
-  // Calling markJobDone on an already-done job (e.g. double-cancel) should be a no-op.
-  const wasActive = job?.status === 'active'
+  const activeRows = await sql`SELECT COUNT(*)::int as cnt FROM queue_jobs WHERE status = 'active'`
+  if ((activeRows[0].cnt as number) >= MAX_CONCURRENT) return undefined
 
-  if (job) {
-    job.status = status
-    job.completedAt = new Date().toISOString()
-    if (error) job.error = error
-  }
-
-  if (!wasActive) {
-    writeQueue(data)
-    return undefined
-  }
-
-  // Only start next job if we're below the concurrency limit (prevents race condition)
-  const activeCount = data.jobs.filter((j) => j.status === 'active').length
-  const maxConcurrent = data.maxConcurrent || MAX_CONCURRENT
-  if (activeCount >= maxConcurrent) {
-    writeQueue(data)
-    return undefined
-  }
-
-  // Find next waiting job
-  const next = data.jobs.find((j) => j.status === 'waiting')
-  if (next) {
-    next.status = 'active'
-    next.startedAt = new Date().toISOString()
-  }
-
-  writeQueue(data)
-  return next
+  const nextRows = await sql`SELECT * FROM queue_jobs WHERE status = 'waiting' ORDER BY created_at ASC LIMIT 1`
+  if (nextRows.length === 0) return undefined
+  const next = rowToJob(nextRows[0])
+  await sql`UPDATE queue_jobs SET status = 'active', started_at = ${new Date().toISOString()} WHERE id = ${next.id}`
+  return { ...next, status: 'active' }
 }
 
-/** Get full queue status. Also expires stale project runs (> 2 h in 'running') and prunes old jobs. */
-export function getQueueStatus(): {
+export async function getQueueStatus(): Promise<{
   active: number
   waiting: number
   maxConcurrent: number
   recentJobs: QueueJob[]
-} {
-  expireStaleRuns()
-  pruneOldJobs()
+}> {
+  await expireStaleRuns()
+  const sql = getSql()
 
-  // Auto-recover queue jobs that have been 'active' for > 2h without completing.
-  // This handles the case where n8n never called the completion webhook (network failure, crash, etc.)
-  // and the queue is stuck with ghost active jobs.
-  const data = readQueue()
-  const cutoff = new Date(Date.now() - 2 * 60 * 60 * 1000)
-  let recovered = 0
-  for (const job of data.jobs) {
-    if (job.status === 'active' && new Date(job.startedAt || job.createdAt) < cutoff) {
-      job.status = 'failed'
-      job.completedAt = new Date().toISOString()
-      job.error = 'auto_expired_stale_active'
-      recovered++
-    }
-  }
-  // If we recovered any stale active jobs, kick off waiting jobs via the queue/start endpoint.
-  // We do NOT set status to 'active' here — markJobActive() is called inside the start endpoint
-  // after n8n is actually triggered. Setting status without triggering creates ghost active jobs.
-  if (recovered > 0) {
-    writeQueue(data)
-    const maxConcurrent = data.maxConcurrent || MAX_CONCURRENT
-    const activeCount = data.jobs.filter((j) => j.status === 'active').length
-    const slotsAvailable = maxConcurrent - activeCount
-    if (slotsAvailable > 0) {
-      const waiting = data.jobs.filter((j) => j.status === 'waiting')
-        .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
-      const base = process.env.INTERNAL_BASE_URL || 'http://localhost:3003'
-      for (let i = 0; i < Math.min(slotsAvailable, waiting.length); i++) {
-        const job = waiting[i]
-        // Fire-and-forget: trigger n8n for this waiting job
+  // Auto-recover stale active jobs (> 2h)
+  const cutoff = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()
+  const recovered = await sql`
+    UPDATE queue_jobs SET status = 'failed', completed_at = ${new Date().toISOString()}, error = 'auto_expired_stale_active'
+    WHERE status = 'active' AND COALESCE(started_at, created_at) < ${cutoff}
+  `
+  if (recovered.count > 0) {
+    const base = process.env.INTERNAL_BASE_URL || 'http://localhost:3000'
+    const slots = MAX_CONCURRENT - ((await sql`SELECT COUNT(*)::int as cnt FROM queue_jobs WHERE status = 'active'`)[0].cnt as number)
+    if (slots > 0) {
+      const waiting = await sql`SELECT * FROM queue_jobs WHERE status = 'waiting' ORDER BY created_at ASC LIMIT ${slots}`
+      for (const row of waiting) {
+        const job = rowToJob(row)
         fetch(`${base}/api/queue/start`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -204,90 +125,50 @@ export function getQueueStatus(): {
     }
   }
 
-  // Auto-kick stuck queue: if active=0 but waiting>0, dispatch immediately.
-  // This handles server restart + stale recovery leaving waiting jobs un-dispatched.
-  const currentData = recovered > 0 ? readQueue() : data
-  const activeAfterRecovery = currentData.jobs.filter((j) => j.status === 'active').length
-  const waitingAfterRecovery = currentData.jobs.filter((j) => j.status === 'waiting')
-  if (activeAfterRecovery === 0 && waitingAfterRecovery.length > 0) {
-    const maxC = currentData.maxConcurrent || MAX_CONCURRENT
-    const toDispatch = waitingAfterRecovery
-      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
-      .slice(0, maxC)
-    for (const job of toDispatch) {
-      job.status = 'active'
-      job.startedAt = new Date().toISOString()
-    }
-    writeQueue(currentData)
-    const base = process.env.INTERNAL_BASE_URL || 'http://localhost:3003'
-    for (const job of toDispatch) {
-      fetch(`${base}/api/queue/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ runId: job.runId, params: job.params }),
-      }).catch(() => {})
-    }
-  }
-
-  // Re-read for up-to-date counts (after any recovery writes)
-  const current = readQueue()
-  const active = current.jobs.filter((j) => j.status === 'active').length
-  const waiting = current.jobs.filter((j) => j.status === 'waiting').length
-
-  // Return recent jobs (last 50, sorted newest first)
-  const recentJobs = [...current.jobs]
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-    .slice(0, 50)
+  const [activeRows, waitingRows, recentRows] = await Promise.all([
+    sql`SELECT COUNT(*)::int as cnt FROM queue_jobs WHERE status = 'active'`,
+    sql`SELECT COUNT(*)::int as cnt FROM queue_jobs WHERE status = 'waiting'`,
+    sql`SELECT * FROM queue_jobs ORDER BY created_at DESC LIMIT 50`,
+  ])
 
   return {
-    active,
-    waiting,
-    maxConcurrent: current.maxConcurrent || MAX_CONCURRENT,
-    recentJobs,
+    active:        activeRows[0].cnt  as number,
+    waiting:       waitingRows[0].cnt as number,
+    maxConcurrent: MAX_CONCURRENT,
+    recentJobs:    recentRows.map(rowToJob),
   }
 }
 
-/** Get the current max concurrent setting. */
-export function getMaxConcurrent(): number {
-  const data = readQueue()
-  return data.maxConcurrent || MAX_CONCURRENT
+export async function getQueuePosition(runId: string): Promise<number> {
+  const sql = getSql()
+  const rows = await sql`
+    SELECT ROW_NUMBER() OVER (ORDER BY created_at ASC)::int as pos
+    FROM queue_jobs
+    WHERE status = 'waiting' AND run_id = ${runId}
+  `
+  return rows.length > 0 ? (rows[0].pos as number) : 0
 }
 
-/** Update max concurrent setting. */
-export function setMaxConcurrent(n: number): void {
-  const data = readQueue()
-  data.maxConcurrent = Math.max(1, Math.min(20, n))
-  writeQueue(data)
+export async function isQueueIdle(): Promise<boolean> {
+  const sql = getSql()
+  const rows = await sql`SELECT COUNT(*)::int as cnt FROM queue_jobs WHERE status IN ('active','waiting')`
+  return (rows[0].cnt as number) === 0
 }
 
-/** Get queue position (1-based) for a waiting job, or 0 if active/not found. */
-export function getQueuePosition(runId: string): number {
-  const data = readQueue()
-  const waitingJobs = data.jobs
-    .filter((j) => j.status === 'waiting')
-    .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
-  const idx = waitingJobs.findIndex((j) => j.runId === runId)
-  return idx === -1 ? 0 : idx + 1
-}
-
-/** Returns true when there are no active or waiting jobs — safe to run heavy maintenance. */
-export function isQueueIdle(): boolean {
-  const data = readQueue()
-  return data.jobs.every((j) => j.status !== 'active' && j.status !== 'waiting')
-}
-
-/** Prune old completed/failed jobs (keep last 200). */
-export function pruneOldJobs(): void {
-  const data = readQueue()
-  const done = data.jobs.filter((j) => j.status === 'completed' || j.status === 'failed')
-  if (done.length > 200) {
-    const keep = new Set(
-      done
-        .sort((a, b) => new Date(b.completedAt || b.createdAt).getTime() - new Date(a.completedAt || a.createdAt).getTime())
-        .slice(0, 200)
-        .map((j) => j.runId)
+export async function pruneOldJobs(): Promise<void> {
+  const sql = getSql()
+  await sql`
+    DELETE FROM queue_jobs
+    WHERE status IN ('completed','failed')
+    AND id NOT IN (
+      SELECT id FROM queue_jobs WHERE status IN ('completed','failed')
+      ORDER BY COALESCE(completed_at, created_at) DESC LIMIT 200
     )
-    data.jobs = data.jobs.filter((j) => j.status === 'active' || j.status === 'waiting' || keep.has(j.runId))
-    writeQueue(data)
-  }
+  `
+}
+
+export async function getJobByRunId(runId: string): Promise<QueueJob | undefined> {
+  const sql = getSql()
+  const rows = await sql`SELECT * FROM queue_jobs WHERE run_id = ${runId} ORDER BY created_at DESC LIMIT 1`
+  return rows.length > 0 ? rowToJob(rows[0]) : undefined
 }

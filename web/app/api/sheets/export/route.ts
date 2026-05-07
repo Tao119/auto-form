@@ -62,16 +62,16 @@ export async function GET(req: NextRequest) {
 
   try {
     // Push all filtering to SQLite, no limit for export
-    const companies = getCompanies(filters)
+    const companies = await getCompanies(filters)
     const rows = companies.map(toRow)
     const csv = rowsToCsv(rows)
 
     let filename = '企業リスト'
     if (runId) {
-      const run = getProjectRun(runId)
+      const run = await getProjectRun(runId)
       if (run) filename = run.label.replace(/[\s/:]/g, '_')
     } else if (projectId) {
-      const proj = getProject(projectId)
+      const proj = await getProject(projectId)
       if (proj) filename = proj.name.replace(/[\s/]/g, '_')
     }
     filename += `_${new Date().toISOString().slice(0, 10)}.csv`

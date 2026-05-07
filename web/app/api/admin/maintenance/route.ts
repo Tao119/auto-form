@@ -18,12 +18,12 @@ export async function POST(req: NextRequest) {
     let pruneOpts: { prune?: boolean; daysOld?: number; statuses?: string[] } = {}
     try { pruneOpts = await req.json() } catch { /* no body or non-JSON — ignore */ }
 
-    const staleExpired = expireStaleRuns()
-    const dbStats = runMaintenance()
+    const staleExpired = await expireStaleRuns()
+    const dbStats = await runMaintenance()
 
     let prunedRows = 0
     if (pruneOpts.prune) {
-      prunedRows = pruneOldData({
+      prunedRows = await pruneOldData({
         daysOld: pruneOpts.daysOld,
         statuses: pruneOpts.statuses,
       })
@@ -42,8 +42,8 @@ export async function POST(req: NextRequest) {
 
 export async function GET() {
   try {
-    const staleExpired = expireStaleRuns()
-    const dbStats = runMaintenance()
+    const staleExpired = await expireStaleRuns()
+    const dbStats = await runMaintenance()
     return NextResponse.json({ success: true, staleRunsExpired: staleExpired, ...dbStats })
   } catch (e) {
     return NextResponse.json({ success: false, error: String(e) }, { status: 500 })

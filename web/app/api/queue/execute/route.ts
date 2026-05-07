@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
     const { runId, projectId, label, ...execFields } = body
 
     // Verify project exists
-    const project = getProject(projectId)
+    const project = await getProject(projectId)
     if (!project) {
       return NextResponse.json({ success: false, error: 'Project not found' }, { status: 404 })
     }
@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
         label: `${execFields.industry} / ${area} ${timestamp}`,
       }))
 
-      const { children } = addBatchRunToProject(
+      const { children } = await addBatchRunToProject(
         projectId,
         {
           id: runId,
@@ -92,11 +92,11 @@ export async function POST(req: NextRequest) {
           ...(execFields.searchProvider && { searchProvider: execFields.searchProvider }),
         }
 
-        const { canStart, queuePosition } = enqueue(child.id, projectId, childParams)
+        const { canStart, queuePosition } = await enqueue(child.id, projectId, childParams)
 
         if (canStart) {
           anyChildStarted = true
-          markJobActive(child.id)
+          await markJobActive(child.id)
           try {
             const result = await triggerWorkflow(childParams)
             fetch(`${base}/api/projects/runs/${child.id}`, {
@@ -105,7 +105,7 @@ export async function POST(req: NextRequest) {
               body: JSON.stringify({ status: 'running', n8nExecutionId: result.executionId }),
             }).catch(() => {})
           } catch (triggerErr) {
-            markJobDone(child.id, 'failed', String(triggerErr))
+            await markJobDone(child.id, 'failed', String(triggerErr))
             fetch(`${base}/api/projects/runs/${child.id}`, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
@@ -171,7 +171,7 @@ export async function POST(req: NextRequest) {
     })
 
     // Enqueue (file-based)
-    const { canStart, queuePosition } = enqueue(runId, projectId, params)
+    const { canStart, queuePosition } = await enqueue(runId, projectId, params)
 
     if (!canStart) {
       return NextResponse.json({
@@ -183,7 +183,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Start immediately
-    markJobActive(runId)
+    await markJobActive(runId)
 
     try {
       const result = await triggerWorkflow(params)
@@ -201,7 +201,7 @@ export async function POST(req: NextRequest) {
       })
     } catch (triggerErr) {
       // Trigger failed — mark queue job as failed so it doesn't block the queue
-      markJobDone(runId, 'failed', String(triggerErr))
+      await markJobDone(runId, 'failed', String(triggerErr))
       await fetch(`${base}/api/projects/runs/${runId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },

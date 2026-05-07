@@ -113,6 +113,7 @@ export interface ProjectRun {
 export type QueueJobStatus = 'waiting' | 'active' | 'completed' | 'failed'
 
 export interface QueueJob {
+  id: string
   runId: string
   projectId: string
   params: ExecuteParams

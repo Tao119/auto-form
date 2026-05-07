@@ -73,7 +73,7 @@ async function writeTab(
 export async function POST(req: NextRequest) {
   try {
     const { projectId, runId } = Schema.parse(await req.json())
-    const project = getProject(projectId)
+    const project = await getProject(projectId)
     if (!project) return NextResponse.json({ success: false, error: 'Project not found' }, { status: 404 })
     if (!project.sheetsId) return NextResponse.json({ success: false, error: 'スプレッドシート未連携' }, { status: 400 })
 
@@ -87,15 +87,15 @@ export async function POST(req: NextRequest) {
 
     if (runId) {
       // ── Single-run export ──────────────────────────────────────
-      const run = getProjectRun(runId) as (ProjectRun & { childRunIds?: string[] }) | undefined
+      const run = (await getProjectRun(runId)) as (ProjectRun & { childRunIds?: string[] }) | undefined
       const tabTitle = run ? toTabTitle(run.label) : toTabTitle(runId)
 
       // Collect data: for batch parents, include all child run data
       let companies
       if (run?.childRunIds?.length) {
-        companies = getCompanies({ runIds: [runId, ...run.childRunIds] })
+        companies = await getCompanies({ runIds: [runId, ...run.childRunIds] })
       } else {
-        companies = getCompanies({ runId })
+        companies = await getCompanies({ runId })
       }
       const rows = companies.map(toRow)
 
@@ -103,7 +103,7 @@ export async function POST(req: NextRequest) {
       await writeTab(sheets, sheetsId, tabTitle, rows)
 
       // Update 全件 tab
-      const allCompanies = getCompanies({ projectId })
+      const allCompanies = await getCompanies({ projectId })
       const allRows = allCompanies.map(toRow)
       await ensureSheet(sheets, sheetsId, existingTitles, '全件')
       await writeTab(sheets, sheetsId, '全件', allRows)
@@ -118,22 +118,22 @@ export async function POST(req: NextRequest) {
 
     // ── Full project export ────────────────────────────────────────
     // Write 全件 tab first
-    const allCompanies = getCompanies({ projectId })
+    const allCompanies = await getCompanies({ projectId })
     const allRows = allCompanies.map(toRow)
     await ensureSheet(sheets, sheetsId, existingTitles, '全件')
     await writeTab(sheets, sheetsId, '全件', allRows)
 
     // Write one tab per top-level run (exclude child runs)
-    const projectRuns = getRunsForProject(projectId) as (ProjectRun & { childRunIds?: string[]; parentRunId?: string })[]
+    const projectRuns = (await getRunsForProject(projectId)) as (ProjectRun & { childRunIds?: string[]; parentRunId?: string })[]
     const topLevelRuns = projectRuns.filter((r) => !r.parentRunId)
 
     for (const run of topLevelRuns) {
       const tabTitle = toTabTitle(run.label)
       let runCompanies
       if (run.childRunIds?.length) {
-        runCompanies = getCompanies({ runIds: [run.id, ...run.childRunIds] })
+        runCompanies = await getCompanies({ runIds: [run.id, ...run.childRunIds] })
       } else {
-        runCompanies = getCompanies({ runId: run.id })
+        runCompanies = await getCompanies({ runId: run.id })
       }
       const runRows = runCompanies.map(toRow)
       await ensureSheet(sheets, sheetsId, existingTitles, tabTitle)

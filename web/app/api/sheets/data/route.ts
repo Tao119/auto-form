@@ -53,13 +53,13 @@ export async function GET(req: NextRequest) {
 
   try {
     // Count and paginate in SQLite — combined query to get total + formCount + phoneCount + emailCount in one pass
-    const { total, formCount, phoneCount, emailCount } = countCompaniesAndFormCount(baseFilters)
+    const { total, formCount, phoneCount, emailCount } = await countCompaniesAndFormCount(baseFilters)
     const offset = (page - 1) * limit
-    const companies = getCompanies({ ...baseFilters, limit, offset, sortBy, sortDir })
+    const companies = await getCompanies({ ...baseFilters, limit, offset, sortBy, sortDir })
     const data = companies.map(toRow)
 
     // Distinct values for dropdown filters (scoped to project, no other filters)
-    const { industries, areas } = getDistinctValues(projectId)
+    const { industries, areas } = await getDistinctValues(projectId)
 
     return NextResponse.json({ success: true, data, total, formCount, phoneCount, emailCount, page, limit, industries, areas })
   } catch (e) {

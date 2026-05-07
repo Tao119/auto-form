@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
     const industry = searchParams.get('industry') ?? undefined
     const area = searchParams.get('area') ?? undefined
 
-    const companies = getCompanies({ projectId, runId, industry, area })
+    const companies = await getCompanies({ projectId, runId, industry, area })
     return NextResponse.json({ success: true, companies, total: companies.length })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'companies array required' }, { status: 400 })
     }
 
-    const { added, duplicates } = addCompanies(companies)
+    const { added, duplicates } = await addCompanies(companies)
     return NextResponse.json({ success: true, added, duplicates })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
@@ -78,13 +78,13 @@ export async function PATCH(req: NextRequest) {
   try {
     const body = PatchSchema.parse(await req.json())
     if ('filter' in body) {
-      const updated = batchUpdateStatusByFilter(body.filter, body.status)
+      const updated = await batchUpdateStatusByFilter(body.filter, body.status)
       return NextResponse.json({ success: true, updated })
     } else if ('ids' in body) {
-      const updated = batchUpdateStatus(body.ids, body.status)
+      const updated = await batchUpdateStatus(body.ids, body.status)
       return NextResponse.json({ success: true, updated })
     } else {
-      const ok = updateCompany(body.id, { status: body.status, notes: body.notes })
+      const ok = await updateCompany(body.id, { status: body.status, notes: body.notes })
       return NextResponse.json({ success: ok, updated: ok ? 1 : 0 })
     }
   } catch (e) {

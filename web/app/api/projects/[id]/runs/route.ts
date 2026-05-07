@@ -4,7 +4,7 @@ import { z } from 'zod'
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const runs = getRunsForProject(params.id).filter((r) => !r.parentRunId)
+    const runs = (await getRunsForProject(params.id)).filter((r) => !r.parentRunId)
     return NextResponse.json({ success: true, data: runs })
   } catch (e) {
     return NextResponse.json({ success: false, error: String(e) }, { status: 500 })
@@ -25,7 +25,7 @@ const AddRunSchema = z.object({
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const body = AddRunSchema.parse(await req.json())
-    const run = addRunToProject(params.id, body)
+    const run = await addRunToProject(params.id, body)
     return NextResponse.json({ success: true, data: run })
   } catch (e) {
     return NextResponse.json({ success: false, error: String(e) }, { status: 400 })

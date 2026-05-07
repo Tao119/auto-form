@@ -6,12 +6,13 @@ export const dynamic = 'force-dynamic'
 /** GET /api/projects/runs — 全プロジェクトの全ランを新しい順で返す */
 export async function GET() {
   try {
-    const projects = getProjects()
+    const projects = await getProjects()
     const projectMap: Record<string, { id: string; name: string }> = {}
     for (const p of projects) projectMap[p.id] = { id: p.id, name: p.name }
 
-    const allRuns = projects
-      .flatMap((p) => getRunsForProject(p.id))
+    const runsLists = await Promise.all(projects.map((p) => getRunsForProject(p.id)))
+    const allRuns = runsLists
+      .flat()
       // Hide child runs — they belong to a batch parent and should not appear in history
       .filter((r) => !r.parentRunId)
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())

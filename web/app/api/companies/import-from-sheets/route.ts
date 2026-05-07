@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
       .filter((r) => r['フォームURL'])
       .map(mapSheetRowToInput)
 
-    const { added, duplicates } = addCompanies(inputs)
+    const { added, duplicates } = await addCompanies(inputs)
 
     return NextResponse.json({ success: true, imported: added, duplicates, total: rows.length })
   } catch (e) {

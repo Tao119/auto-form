@@ -91,7 +91,7 @@ export async function POST(
         validCompanies.push(c as CompanyInput)
       }
       if (validCompanies.length > 0) {
-        const { added, upgraded } = addCompanies(validCompanies)
+        const { added, upgraded } = await addCompanies(validCompanies)
         actualAdded = added
         actualUpgraded = upgraded
       }
@@ -100,10 +100,10 @@ export async function POST(
     // Use actual SQLite row count for this runId as the authoritative itemsWritten.
     // This reflects dedup-after state: companies that were flagged as duplicates of other runs
     // still land in DB under this runId, so the count matches what the results page shows.
-    const dbRunCount = body.companies?.length ? countCompanies({ runId }) : 0
+    const dbRunCount = body.companies?.length ? await countCompanies({ runId }) : 0
     const itemsWritten = dbRunCount > 0 ? dbRunCount : (body.itemsWritten ?? body.results?.itemsWritten ?? 0)
 
-    updateRunStatus(runId, body.status, undefined, itemsWritten, {
+    await updateRunStatus(runId, body.status, undefined, itemsWritten, {
       tokensInput: body.tokensInput,
       tokensOutput: body.tokensOutput,
       estimatedCostUsd,
@@ -114,13 +114,13 @@ export async function POST(
     })
 
     // If this is a child run, roll up stats into the batch parent (idempotent once all done)
-    const completedRun = getProjectRun(runId)
+    const completedRun = await getProjectRun(runId)
     if (completedRun?.parentRunId) {
-      rollupBatchRun(completedRun.parentRunId)
+      await rollupBatchRun(completedRun.parentRunId)
     }
 
     // Trigger next queued job
-    const next = markJobDone(runId, body.status === 'success' ? 'completed' : 'failed', body.error)
+    const next = await markJobDone(runId, body.status === 'success' ? 'completed' : 'failed', body.error)
     const base = process.env.INTERNAL_BASE_URL || 'http://localhost:3003'
     if (next) {
       fetch(`${base}/api/queue/start`, {
@@ -128,7 +128,7 @@ export async function POST(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ runId: next.runId, params: next.params }),
       }).catch(() => {})
-    } else if (isQueueIdle()) {
+    } else if (await isQueueIdle()) {
       // Queue is fully drained — run DB housekeeping in the background (non-blocking).
       // Also prune rows older than 90 days that are in terminal statuses (送信済み, スキップ)
       // to keep the DB lean without manual intervention.

@@ -1,10 +1,5 @@
-import Database from 'better-sqlite3'
-import path from 'path'
-import fs from 'fs'
+import getSql from './db'
 import type { CompanyRow } from './types'
-
-const DATA_DIR = path.join(process.cwd(), 'data')
-const DB_FILE = path.join(DATA_DIR, 'companies.db')
 
 export interface Company {
   id: string
@@ -24,7 +19,7 @@ export interface Company {
   projectId: string
   runId: string
   collectedAt: string
-  importedFromSheets: number // 0 | 1  (SQLite has no bool)
+  importedFromSheets: boolean
 }
 
 export interface CompanyInput {
@@ -51,16 +46,16 @@ export type CompanySortDir = 'ASC' | 'DESC'
 export interface CompanyFilters {
   projectId?: string
   runId?: string
-  runIds?: string[]  // filter by multiple run IDs (IN clause)
+  runIds?: string[]
   industry?: string
   area?: string
   status?: string
   formType?: string
-  search?: string  // searches name, hpUrl, formUrl
-  hasForm?: string  // 'true' = formUrl != '', 'false' = formUrl = ''
-  hasPhone?: string // 'true' = phone != ''
-  hasEmail?: string // 'true' = email != ''
-  ids?: string[]   // filter by specific company IDs (for selective export)
+  search?: string
+  hasForm?: string
+  hasPhone?: string
+  hasEmail?: string
+  ids?: string[]
   sortBy?: CompanySortBy
   sortDir?: CompanySortDir
   limit?: number
@@ -80,649 +75,388 @@ export function isLineUrl(url: string): boolean {
   return LINE_URL_PATTERNS.some(re => re.test(url))
 }
 
-// Tracking query parameters that should be stripped before URL normalization / dedup.
-// Includes: standard UTM/ad tracking, LINE display params (openQrModal, oat_content),
-// mypl.net skin param, and other non-identifying UI/referral params.
 const NORM_TRACKING_PARAMS = [
-  // Standard ad/analytics tracking
   'utm_source','utm_medium','utm_campaign','utm_term','utm_content',
   'fbclid','gclid','msclkid','ref','from','_ga','_gl','yclid','twclid',
-  // LINE URL display-only params (do not distinguish LINE accounts)
   'openqrmodal','oat_content','oat__ck',
-  // mypl.net / portal skin param
   'skin',
-  // Google Business Profile referral
   'site_code','SITE_CODE',
-  // WordPress page ID (when used as the sole query param on a contact/form page,
-  // the path already identifies the page uniquely; stripping prevents dedup misses
-  // caused by inconsistent normalization across collection rounds)
   'page_id',
 ]
 
-// ── URL normalization ──────────────────────────────────────────────
 export function normalizeUrl(url: string): string {
   if (!url) return ''
-  // Pre-process: decode HTML entities (&amp; → &) before URL parsing
   const decoded = url.replace(/&amp;/gi, '&')
   try {
     const u = new URL(decoded)
-    // Strip known tracking/display query parameters before dedup comparison
-    // Use case-insensitive matching since params may vary in casing across sources
     const toDelete = [...u.searchParams.keys()].filter((k) =>
       NORM_TRACKING_PARAMS.some((p) => p.toLowerCase() === k.toLowerCase())
     )
     toDelete.forEach((k) => u.searchParams.delete(k))
-    // Build normalized key: host + path (strip scheme, www, trailing slash)
-    const path = u.pathname.replace(/\/+$/, '').replace(/\/{2,}/g, '/') + (u.search || '')
-    return (u.hostname + path).toLowerCase().replace(/^www\./, '')
+    const pathname = u.pathname.replace(/\/+$/, '').replace(/\/{2,}/g, '/') + (u.search || '')
+    return (u.hostname + pathname).toLowerCase().replace(/^www\./, '')
   } catch {
     return decoded.toLowerCase().trim()
   }
-}
-
-// ── DB singleton ───────────────────────────────────────────────────
-let _db: Database.Database | null = null
-
-function getDb(): Database.Database {
-  if (_db) return _db
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true })
-  _db = new Database(DB_FILE)
-  _db.pragma('journal_mode = WAL')
-  _db.pragma('synchronous = NORMAL')
-  _db.pragma('wal_autocheckpoint = 400')  // checkpoint every ~1.6MB (400 * 4096 bytes)
-  _db.exec(`
-    CREATE TABLE IF NOT EXISTS companies (
-      id                TEXT PRIMARY KEY,
-      name              TEXT NOT NULL DEFAULT '',
-      hpUrl             TEXT NOT NULL DEFAULT '',
-      formUrl           TEXT NOT NULL DEFAULT '',
-      normalizedFormUrl TEXT NOT NULL DEFAULT '',
-      normalizedHpUrl   TEXT NOT NULL DEFAULT '',
-      phone             TEXT NOT NULL DEFAULT '',
-      email             TEXT NOT NULL DEFAULT '',
-      address           TEXT NOT NULL DEFAULT '',
-      industry          TEXT NOT NULL DEFAULT '',
-      area              TEXT NOT NULL DEFAULT '',
-      formType          TEXT NOT NULL DEFAULT '',
-      status            TEXT NOT NULL DEFAULT '未送信',
-      notes             TEXT NOT NULL DEFAULT '',
-      projectId         TEXT NOT NULL DEFAULT '',
-      runId             TEXT NOT NULL DEFAULT '',
-      collectedAt       TEXT NOT NULL DEFAULT '',
-      importedFromSheets INTEGER NOT NULL DEFAULT 0
-    );
-    CREATE INDEX IF NOT EXISTS idx_companies_normalizedFormUrl ON companies(normalizedFormUrl);
-    CREATE INDEX IF NOT EXISTS idx_companies_normalizedHpUrl   ON companies(normalizedHpUrl);
-    CREATE INDEX IF NOT EXISTS idx_companies_projectId        ON companies(projectId);
-    CREATE INDEX IF NOT EXISTS idx_companies_runId            ON companies(runId);
-    CREATE INDEX IF NOT EXISTS idx_companies_industry         ON companies(industry);
-    CREATE INDEX IF NOT EXISTS idx_companies_area             ON companies(area);
-    CREATE INDEX IF NOT EXISTS idx_companies_status           ON companies(status);
-    CREATE INDEX IF NOT EXISTS idx_companies_formType         ON companies(formType);
-    CREATE INDEX IF NOT EXISTS idx_companies_collectedAt      ON companies(collectedAt DESC);
-    CREATE INDEX IF NOT EXISTS idx_companies_formUrl_ne       ON companies(projectId, formUrl) WHERE formUrl != '';
-    CREATE INDEX IF NOT EXISTS idx_companies_phone_ne         ON companies(projectId, phone)   WHERE phone  != '';
-    CREATE INDEX IF NOT EXISTS idx_companies_email_ne         ON companies(projectId, email)   WHERE email  != '';
-  `)
-  // Migration: add normalizedHpUrl column for existing DBs (ignored if column already exists)
-  try { _db.exec(`ALTER TABLE companies ADD COLUMN normalizedHpUrl TEXT NOT NULL DEFAULT ''`) } catch {}
-  // Migration: add address column for existing DBs created before address extraction was added
-  try { _db.exec(`ALTER TABLE companies ADD COLUMN address TEXT NOT NULL DEFAULT ''`) } catch {}
-  // Populate normalizedHpUrl for rows that still have the default ''
-  _db.exec(`
-    UPDATE companies
-    SET normalizedHpUrl = LOWER(RTRIM(
-      CASE
-        WHEN hpUrl LIKE 'https://www.%' THEN SUBSTR(hpUrl, 13)
-        WHEN hpUrl LIKE 'http://www.%'  THEN SUBSTR(hpUrl, 12)
-        WHEN hpUrl LIKE 'https://%'     THEN SUBSTR(hpUrl, 9)
-        WHEN hpUrl LIKE 'http://%'      THEN SUBSTR(hpUrl, 8)
-        ELSE hpUrl
-      END, '/'))
-    WHERE normalizedHpUrl = '' AND hpUrl != ''
-  `)
-  // Migration: fix formType for existing LINE URLs that were mis-classified as 'inquiry'
-  _db.exec(`
-    UPDATE companies
-    SET formType = 'LINE'
-    WHERE formType != 'LINE'
-      AND (
-        formUrl LIKE '%://lin.ee/%'
-        OR formUrl LIKE '%://page.line.me/%'
-        OR formUrl LIKE '%://accountpage.line.me/%'
-        OR formUrl LIKE '%://liff.line.me/%'
-      )
-  `)
-  // Migration: reclassify booking SaaS URLs that were mis-classified as 'inquiry'
-  _db.exec(`
-    UPDATE companies
-    SET formType = 'reservation'
-    WHERE formType = 'inquiry'
-      AND (
-        formUrl LIKE '%://b.hpr.jp/%'
-        OR formUrl LIKE '%://riyou.jp/%'
-        OR formUrl LIKE '%://stekina.com/%'
-        OR formUrl LIKE '%://haisha-yoyaku.jp/%'
-        OR formUrl LIKE '%://ssl.haisha-yoyaku.jp/%'
-        OR formUrl LIKE '%://eparkdentist.com/%'
-        OR formUrl LIKE '%dentamap.jp/%'
-        OR formUrl LIKE '%://ekiten.jp/%'
-        OR formUrl LIKE '%b-merit.jp%'
-        OR (formUrl LIKE '%coubic.com%' AND formUrl NOT LIKE '%/contact%')
-        OR (formUrl LIKE '%airrsv.net%' AND formUrl LIKE '%/calendar%')
-        OR formUrl LIKE '%://epark.jp/shopinfo/%'
-      )
-  `)
-  // Migration: reclassify recruitment/job-application forms mis-classified as 'inquiry'.
-  // Targets very specific URL patterns that unambiguously indicate job-application forms
-  // (e.g. /recruit/entry/, /saiyo/entry/, /career/apply/) to avoid false-positive reclassification.
-  _db.exec(`
-    UPDATE companies
-    SET formType = 'recruitment'
-    WHERE formType = 'inquiry'
-      AND (
-        formUrl LIKE '%/recruit/entry%'
-        OR formUrl LIKE '%/recruit-entry%'
-        OR formUrl LIKE '%/saiyo/entry%'
-        OR formUrl LIKE '%/career/apply%'
-        OR formUrl LIKE '%/careers/apply%'
-        OR formUrl LIKE '%/jobs/apply%'
-        OR formUrl LIKE '%/obo/%'
-        OR (formUrl LIKE '%recruit%' AND formUrl LIKE '%/apply%')
-      )
-  `)
-  // Migration: re-normalize URLs where display params leaked into normalizedFormUrl.
-  // Affects LINE URLs (?openQrModal, ?oat_content) and mypl.net (?skin=) that were
-  // inserted before those params were added to NORM_TRACKING_PARAMS.
-  // This re-normalizes ~245 affected records and then removes the duplicates that result.
-  {
-    type Row = { id: string; formUrl: string; normalizedFormUrl: string }
-    const stale = _db.prepare(`
-      SELECT id, formUrl, normalizedFormUrl FROM companies
-      WHERE normalizedFormUrl LIKE '%openqrmodal%'
-         OR normalizedFormUrl LIKE '%oat_content%'
-         OR normalizedFormUrl LIKE '%oat__%'
-         OR normalizedFormUrl LIKE '%skin=%'
-         OR normalizedFormUrl LIKE '%site_code%'
-    `).all() as Row[]
-
-    if (stale.length > 0) {
-      const update = _db.prepare(`UPDATE companies SET normalizedFormUrl = ? WHERE id = ?`)
-      const doUpdates = _db.transaction((rows: Row[]) => {
-        for (const row of rows) {
-          const newNorm = normalizeUrl(row.formUrl)
-          if (newNorm !== row.normalizedFormUrl) update.run(newNorm, row.id)
-        }
-      })
-      doUpdates(stale)
-
-      // Remove duplicate records that now share the same normalizedFormUrl.
-      // Keep the one with the earlier collectedAt (or smaller id as tiebreaker).
-      _db.exec(`
-        DELETE FROM companies
-        WHERE id IN (
-          SELECT id FROM (
-            SELECT id,
-                   ROW_NUMBER() OVER (
-                     PARTITION BY normalizedFormUrl
-                     ORDER BY COALESCE(NULLIF(collectedAt,''), '9999') ASC, id ASC
-                   ) as rn
-            FROM companies
-            WHERE normalizedFormUrl != ''
-          )
-          WHERE rn > 1
-        )
-      `)
-    }
-  }
-  return _db
 }
 
 function generateId(): string {
   return `cmp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
 }
 
-// ── Public API ────────────────────────────────────────────────────
-
-export function getCompanies(filters?: CompanyFilters): Company[] {
-  const db = getDb()
-  const clauses: string[] = []
-  const namedParams: Record<string, string | number> = {}
-  const positionalValues: (string | number)[] = []
-
-  if (filters?.projectId) { clauses.push('projectId = ?'); positionalValues.push(filters.projectId) }
-  if (filters?.runId)     { clauses.push('runId = ?');     positionalValues.push(filters.runId) }
-  if (filters?.industry)  { clauses.push('industry = ?');  positionalValues.push(filters.industry) }
-  if (filters?.area)      { clauses.push('area = ?');      positionalValues.push(filters.area) }
-  if (filters?.status)    { clauses.push('status = ?');    positionalValues.push(filters.status) }
-  if (filters?.formType)  { clauses.push('formType = ?');  positionalValues.push(filters.formType) }
-  if (filters?.search) {
-    const q = `%${filters.search.toLowerCase()}%`
-    clauses.push('(LOWER(name) LIKE ? OR LOWER(hpUrl) LIKE ? OR LOWER(formUrl) LIKE ? OR LOWER(address) LIKE ? OR phone LIKE ? OR LOWER(email) LIKE ? OR LOWER(notes) LIKE ?)')
-    positionalValues.push(q, q, q, q, q, q, q)
-  }
-  if (filters?.hasForm === 'true')  clauses.push("formUrl != ''")
-  if (filters?.hasForm === 'false') clauses.push("formUrl = ''")
-  if (filters?.hasPhone === 'true') clauses.push("phone != ''")
-  if (filters?.hasEmail === 'true') clauses.push("email != ''")
-
-  // IDs / runIds filters use IN clause (positional only — compatible with the rest now)
-  const idsFilter = filters?.ids?.length ? filters.ids : null
-  const runIdsFilter = !filters?.runId && filters?.runIds?.length ? filters.runIds : null
-
-  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
-
-  // Whitelist allowed sort columns to prevent SQL injection
-  const ALLOWED_SORT: ReadonlySet<string> = new Set(['collectedAt', 'name', 'industry', 'area', 'status', 'formType'])
-  const sortCol = filters?.sortBy && ALLOWED_SORT.has(filters.sortBy) ? filters.sortBy : 'collectedAt'
-  const sortDir = filters?.sortDir === 'ASC' ? 'ASC' : 'DESC'
-
-  const limit  = filters?.limit  !== undefined ? filters.limit  : null
-  const offset = filters?.offset !== undefined ? filters.offset : 0
-  const limitClause = limit !== null ? `LIMIT ? OFFSET ?` : ''
-
-  if (idsFilter) {
-    const placeholders = idsFilter.map(() => '?').join(',')
-    const idsWhere = clauses.length ? `${where} AND id IN (${placeholders})` : `WHERE id IN (${placeholders})`
-    return db.prepare(`SELECT * FROM companies ${idsWhere} ORDER BY ${sortCol} ${sortDir}`)
-      .all([...positionalValues, ...idsFilter]) as Company[]
-  }
-
-  if (runIdsFilter) {
-    const placeholders = runIdsFilter.map(() => '?').join(',')
-    const runIdsWhere = clauses.length ? `${where} AND runId IN (${placeholders})` : `WHERE runId IN (${placeholders})`
-    const allParams = [...positionalValues, ...runIdsFilter, ...(limit !== null ? [limit, offset] : [])]
-    return db.prepare(`SELECT * FROM companies ${runIdsWhere} ORDER BY ${sortCol} ${sortDir} ${limitClause}`)
-      .all(allParams) as Company[]
-  }
-
-  const allParams = [...positionalValues, ...(limit !== null ? [limit, offset] : [])]
-  return db.prepare(`SELECT * FROM companies ${where} ORDER BY ${sortCol} ${sortDir} ${limitClause}`)
-    .all(allParams.length ? allParams : namedParams) as Company[]
-}
-
-export function countCompanies(filters?: Omit<CompanyFilters, 'limit' | 'offset'>): number {
-  const db = getDb()
-  const clauses: string[] = []
-  const params: Record<string, string> = {}
-
-  if (filters?.projectId) { clauses.push('projectId = @projectId'); params.projectId = filters.projectId }
-  if (filters?.runId)     { clauses.push('runId = @runId');         params.runId = filters.runId }
-  if (filters?.industry)  { clauses.push('industry = @industry');   params.industry = filters.industry }
-  if (filters?.area)      { clauses.push('area = @area');           params.area = filters.area }
-  if (filters?.status)    { clauses.push('status = @status');       params.status = filters.status }
-  if (filters?.formType)  { clauses.push('formType = @formType');   params.formType = filters.formType }
-  if (filters?.search) {
-    const q = `%${filters.search.toLowerCase()}%`
-    clauses.push('(LOWER(name) LIKE @search OR LOWER(hpUrl) LIKE @search OR LOWER(formUrl) LIKE @search OR LOWER(address) LIKE @search OR phone LIKE @search OR LOWER(email) LIKE @search OR LOWER(notes) LIKE @search)')
-    params.search = q
-  }
-  if (filters?.hasForm === 'true')  clauses.push("formUrl != ''")
-  if (filters?.hasForm === 'false') clauses.push("formUrl = ''")
-  if (filters?.hasPhone === 'true') clauses.push("phone != ''")
-  if (filters?.hasEmail === 'true') clauses.push("email != ''")
-
-  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
-  const row = db.prepare(`SELECT COUNT(*) as cnt FROM companies ${where}`).get(params) as { cnt: number }
-  return row.cnt
-}
-
-/**
- * Single-query version of two consecutive countCompanies() calls.
- * Returns both the total row count (with all filters) and the form-found count
- * (same filters, additionally constrained to formUrl != '').
- *
- * When hasForm is 'true'  → total == formCount.
- * When hasForm is 'false' → total = count with formUrl='', formCount = 0.
- * When hasForm is unset   → one SQL pass computes both with a CASE expression.
- */
-export function countCompaniesAndFormCount(
-  filters?: Omit<CompanyFilters, 'limit' | 'offset'>
-): { total: number; formCount: number; phoneCount: number; emailCount: number } {
-  const db = getDb()
-  const clauses: string[] = []
-  const positionalValues: (string | number)[] = []
-
-  if (filters?.projectId) { clauses.push('projectId = ?'); positionalValues.push(filters.projectId) }
-  if (filters?.runId)     { clauses.push('runId = ?');     positionalValues.push(filters.runId) }
-  if (filters?.industry)  { clauses.push('industry = ?');  positionalValues.push(filters.industry) }
-  if (filters?.area)      { clauses.push('area = ?');      positionalValues.push(filters.area) }
-  if (filters?.status)    { clauses.push('status = ?');    positionalValues.push(filters.status) }
-  if (filters?.formType)  { clauses.push('formType = ?');  positionalValues.push(filters.formType) }
-  if (filters?.search) {
-    const q = `%${filters.search.toLowerCase()}%`
-    clauses.push('(LOWER(name) LIKE ? OR LOWER(hpUrl) LIKE ? OR LOWER(formUrl) LIKE ? OR LOWER(address) LIKE ? OR phone LIKE ? OR LOWER(email) LIKE ? OR LOWER(notes) LIKE ?)')
-    positionalValues.push(q, q, q, q, q, q, q)
-  }
-  if (filters?.hasForm === 'true')  clauses.push("formUrl != ''")
-  if (filters?.hasForm === 'false') clauses.push("formUrl = ''")
-  if (filters?.hasPhone === 'true') clauses.push("phone != ''")
-  if (filters?.hasEmail === 'true') clauses.push("email != ''")
-
-  const runIdsFilter = !filters?.runId && filters?.runIds?.length ? filters.runIds : null
-  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
-
-  let finalWhere = where
-  if (runIdsFilter) {
-    const placeholders = runIdsFilter.map(() => '?').join(',')
-    finalWhere = clauses.length ? `${where} AND runId IN (${placeholders})` : `WHERE runId IN (${placeholders})`
-    positionalValues.push(...runIdsFilter)
-  }
-
-  const row = db.prepare(`
-      SELECT
-        COUNT(*) as total,
-        SUM(CASE WHEN formUrl  != '' THEN 1 ELSE 0 END) as formCount,
-        SUM(CASE WHEN phone    != '' THEN 1 ELSE 0 END) as phoneCount,
-        SUM(CASE WHEN email    != '' THEN 1 ELSE 0 END) as emailCount
-      FROM companies ${finalWhere}
-    `).get(positionalValues) as { total: number; formCount: number; phoneCount: number; emailCount: number }
-
-  // When hasForm filter is 'false', no row can have a form URL — formCount is always 0
+// DB row → Company (snake_case → camelCase)
+function rowToCompany(r: Record<string, unknown>): Company {
   return {
-    total:      row.total,
-    formCount:  filters?.hasForm  === 'false' ? 0 : (row.formCount  ?? 0),
-    phoneCount: filters?.hasPhone === 'false' ? 0 : (row.phoneCount ?? 0),
-    emailCount: filters?.hasEmail === 'false' ? 0 : (row.emailCount ?? 0),
+    id:                  r.id as string,
+    name:                r.name as string,
+    hpUrl:               r.hp_url as string,
+    formUrl:             r.form_url as string,
+    normalizedFormUrl:   r.normalized_form_url as string,
+    normalizedHpUrl:     r.normalized_hp_url as string,
+    phone:               r.phone as string,
+    email:               r.email as string,
+    address:             r.address as string,
+    industry:            r.industry as string,
+    area:                r.area as string,
+    formType:            r.form_type as string,
+    status:              r.status as string,
+    notes:               r.notes as string,
+    projectId:           r.project_id as string,
+    runId:               r.run_id as string,
+    collectedAt:         r.collected_at as string,
+    importedFromSheets:  r.imported_from_sheets as boolean,
   }
 }
 
-/** Get distinct values for filter dropdowns, scoped to a project. */
-export function getDistinctValues(projectId?: string): { industries: string[]; areas: string[] } {
-  const db = getDb()
-  const where = projectId ? 'WHERE projectId = @projectId' : ''
-  const params = projectId ? { projectId } : {}
-  const industries = (db.prepare(`SELECT DISTINCT industry FROM companies ${where} ORDER BY industry`).all(params) as {industry: string}[])
-    .map(r => r.industry).filter(Boolean)
-  const areas = (db.prepare(`SELECT DISTINCT area FROM companies ${where} ORDER BY area`).all(params) as {area: string}[])
-    .map(r => r.area).filter(Boolean)
-  return { industries, areas }
+const ALLOWED_SORT: Record<CompanySortBy, string> = {
+  collectedAt: 'collected_at',
+  name:        'name',
+  industry:    'industry',
+  area:        'area',
+  status:      'status',
+  formType:    'form_type',
 }
 
-/**
- * Efficient aggregate stats via SQL GROUP BY — avoids loading all rows into memory.
- * Used by the dashboard to show totals without scanning every row in JS.
- */
-export function getCompanyStats(projectId?: string): {
+export async function getCompanies(filters?: CompanyFilters): Promise<Company[]> {
+  const sql = getSql()
+  const sortCol = ALLOWED_SORT[filters?.sortBy ?? 'collectedAt'] ?? 'collected_at'
+  const sortDir = filters?.sortDir === 'ASC' ? sql`ASC` : sql`DESC`
+  const limit  = filters?.limit  ?? null
+  const offset = filters?.offset ?? 0
+
+  const rows = await sql`
+    SELECT * FROM companies
+    WHERE TRUE
+      ${filters?.projectId ? sql`AND project_id = ${filters.projectId}` : sql``}
+      ${filters?.runId     ? sql`AND run_id = ${filters.runId}` : sql``}
+      ${filters?.runIds?.length ? sql`AND run_id = ANY(${filters.runIds})` : sql``}
+      ${filters?.industry  ? sql`AND industry = ${filters.industry}` : sql``}
+      ${filters?.area      ? sql`AND area = ${filters.area}` : sql``}
+      ${filters?.status    ? sql`AND status = ${filters.status}` : sql``}
+      ${filters?.formType  ? sql`AND form_type = ${filters.formType}` : sql``}
+      ${filters?.search    ? sql`AND (
+        LOWER(name) LIKE ${'%' + filters.search.toLowerCase() + '%'}
+        OR LOWER(hp_url) LIKE ${'%' + filters.search.toLowerCase() + '%'}
+        OR LOWER(form_url) LIKE ${'%' + filters.search.toLowerCase() + '%'}
+        OR LOWER(address) LIKE ${'%' + filters.search.toLowerCase() + '%'}
+        OR phone LIKE ${'%' + filters.search + '%'}
+        OR LOWER(email) LIKE ${'%' + filters.search.toLowerCase() + '%'}
+        OR LOWER(notes) LIKE ${'%' + filters.search.toLowerCase() + '%'}
+      )` : sql``}
+      ${filters?.hasForm  === 'true'  ? sql`AND form_url != ''` : sql``}
+      ${filters?.hasForm  === 'false' ? sql`AND form_url = ''`  : sql``}
+      ${filters?.hasPhone === 'true'  ? sql`AND phone != ''`    : sql``}
+      ${filters?.hasEmail === 'true'  ? sql`AND email != ''`    : sql``}
+      ${filters?.ids?.length ? sql`AND id = ANY(${filters.ids})` : sql``}
+    ORDER BY ${sql(sortCol)} ${sortDir}
+    ${limit !== null ? sql`LIMIT ${limit} OFFSET ${offset}` : sql``}
+  `
+  return rows.map(rowToCompany)
+}
+
+export async function countCompanies(filters?: Omit<CompanyFilters, 'limit' | 'offset'>): Promise<number> {
+  const sql = getSql()
+  const rows = await sql`
+    SELECT COUNT(*)::int as cnt FROM companies
+    WHERE TRUE
+      ${filters?.projectId ? sql`AND project_id = ${filters.projectId}` : sql``}
+      ${filters?.runId     ? sql`AND run_id = ${filters.runId}` : sql``}
+      ${filters?.runIds?.length ? sql`AND run_id = ANY(${filters.runIds})` : sql``}
+      ${filters?.industry  ? sql`AND industry = ${filters.industry}` : sql``}
+      ${filters?.area      ? sql`AND area = ${filters.area}` : sql``}
+      ${filters?.status    ? sql`AND status = ${filters.status}` : sql``}
+      ${filters?.formType  ? sql`AND form_type = ${filters.formType}` : sql``}
+      ${filters?.search    ? sql`AND (
+        LOWER(name) LIKE ${'%' + filters.search.toLowerCase() + '%'}
+        OR LOWER(hp_url) LIKE ${'%' + filters.search.toLowerCase() + '%'}
+        OR LOWER(form_url) LIKE ${'%' + filters.search.toLowerCase() + '%'}
+        OR LOWER(address) LIKE ${'%' + filters.search.toLowerCase() + '%'}
+        OR phone LIKE ${'%' + filters.search + '%'}
+        OR LOWER(email) LIKE ${'%' + filters.search.toLowerCase() + '%'}
+        OR LOWER(notes) LIKE ${'%' + filters.search.toLowerCase() + '%'}
+      )` : sql``}
+      ${filters?.hasForm  === 'true'  ? sql`AND form_url != ''` : sql``}
+      ${filters?.hasForm  === 'false' ? sql`AND form_url = ''`  : sql``}
+      ${filters?.hasPhone === 'true'  ? sql`AND phone != ''`    : sql``}
+      ${filters?.hasEmail === 'true'  ? sql`AND email != ''`    : sql``}
+  `
+  return rows[0].cnt as number
+}
+
+export async function countCompaniesAndFormCount(
+  filters?: Omit<CompanyFilters, 'limit' | 'offset'>
+): Promise<{ total: number; formCount: number; phoneCount: number; emailCount: number }> {
+  const sql = getSql()
+  const rows = await sql`
+    SELECT
+      COUNT(*)::int as total,
+      SUM(CASE WHEN form_url  != '' THEN 1 ELSE 0 END)::int as form_count,
+      SUM(CASE WHEN phone     != '' THEN 1 ELSE 0 END)::int as phone_count,
+      SUM(CASE WHEN email     != '' THEN 1 ELSE 0 END)::int as email_count
+    FROM companies
+    WHERE TRUE
+      ${filters?.projectId ? sql`AND project_id = ${filters.projectId}` : sql``}
+      ${filters?.runId     ? sql`AND run_id = ${filters.runId}` : sql``}
+      ${filters?.runIds?.length ? sql`AND run_id = ANY(${filters.runIds})` : sql``}
+      ${filters?.industry  ? sql`AND industry = ${filters.industry}` : sql``}
+      ${filters?.area      ? sql`AND area = ${filters.area}` : sql``}
+      ${filters?.status    ? sql`AND status = ${filters.status}` : sql``}
+      ${filters?.formType  ? sql`AND form_type = ${filters.formType}` : sql``}
+      ${filters?.search    ? sql`AND (
+        LOWER(name) LIKE ${'%' + filters.search.toLowerCase() + '%'}
+        OR LOWER(hp_url) LIKE ${'%' + filters.search.toLowerCase() + '%'}
+        OR LOWER(form_url) LIKE ${'%' + filters.search.toLowerCase() + '%'}
+        OR LOWER(address) LIKE ${'%' + filters.search.toLowerCase() + '%'}
+        OR phone LIKE ${'%' + filters.search + '%'}
+        OR LOWER(email) LIKE ${'%' + filters.search.toLowerCase() + '%'}
+        OR LOWER(notes) LIKE ${'%' + filters.search.toLowerCase() + '%'}
+      )` : sql``}
+      ${filters?.hasForm  === 'true'  ? sql`AND form_url != ''` : sql``}
+      ${filters?.hasForm  === 'false' ? sql`AND form_url = ''`  : sql``}
+      ${filters?.hasPhone === 'true'  ? sql`AND phone != ''`    : sql``}
+      ${filters?.hasEmail === 'true'  ? sql`AND email != ''`    : sql``}
+  `
+  const r = rows[0]
+  return {
+    total:      r.total      as number,
+    formCount:  filters?.hasForm  === 'false' ? 0 : (r.form_count  as number ?? 0),
+    phoneCount: filters?.hasPhone === 'false' ? 0 : (r.phone_count as number ?? 0),
+    emailCount: filters?.hasEmail === 'false' ? 0 : (r.email_count as number ?? 0),
+  }
+}
+
+export async function getDistinctValues(projectId?: string): Promise<{ industries: string[]; areas: string[] }> {
+  const sql = getSql()
+  const [indRows, areaRows] = await Promise.all([
+    sql`SELECT DISTINCT industry FROM companies ${projectId ? sql`WHERE project_id = ${projectId}` : sql``} ORDER BY industry`,
+    sql`SELECT DISTINCT area     FROM companies ${projectId ? sql`WHERE project_id = ${projectId}` : sql``} ORDER BY area`,
+  ])
+  return {
+    industries: indRows.map(r => r.industry as string).filter(Boolean),
+    areas:      areaRows.map(r => r.area as string).filter(Boolean),
+  }
+}
+
+export async function getCompanyStats(projectId?: string): Promise<{
   total: number
   formFoundCount: number
   byStatus: Record<string, number>
   byFormType: Record<string, number>
-} {
-  const db = getDb()
-  const where = projectId ? 'WHERE projectId = @projectId' : ''
-  const params = projectId ? { projectId } : {}
+}> {
+  const sql = getSql()
+  const where = projectId ? sql`WHERE project_id = ${projectId}` : sql``
 
-  const totalRow = db.prepare(`SELECT COUNT(*) as cnt, SUM(CASE WHEN formUrl != '' THEN 1 ELSE 0 END) as formFound FROM companies ${where}`).get(params) as { cnt: number; formFound: number }
-
-  const statusRows = db.prepare(`SELECT status, COUNT(*) as cnt FROM companies ${where} GROUP BY status`).all(params) as Array<{ status: string; cnt: number }>
-  const formTypeRows = db.prepare(`SELECT formType, COUNT(*) as cnt FROM companies ${where} GROUP BY formType`).all(params) as Array<{ formType: string; cnt: number }>
+  const [totalRows, statusRows, formTypeRows] = await Promise.all([
+    sql`SELECT COUNT(*)::int as cnt, SUM(CASE WHEN form_url != '' THEN 1 ELSE 0 END)::int as form_found FROM companies ${where}`,
+    sql`SELECT status, COUNT(*)::int as cnt FROM companies ${where} GROUP BY status`,
+    sql`SELECT form_type, COUNT(*)::int as cnt FROM companies ${where} GROUP BY form_type`,
+  ])
 
   const byStatus: Record<string, number> = {}
-  for (const r of statusRows) byStatus[r.status || '不明'] = r.cnt
+  for (const r of statusRows) byStatus[r.status as string || '不明'] = r.cnt as number
 
   const byFormType: Record<string, number> = {}
-  for (const r of formTypeRows) byFormType[r.formType || 'unknown'] = r.cnt
+  for (const r of formTypeRows) byFormType[r.form_type as string || 'unknown'] = r.cnt as number
 
   return {
-    total: totalRow.cnt,
-    formFoundCount: totalRow.formFound,
+    total: totalRows[0].cnt as number,
+    formFoundCount: totalRows[0].form_found as number,
     byStatus,
     byFormType,
   }
 }
 
-/**
- * Batch stats for multiple projects in a single SQL query.
- * Replaces N×2 countCompanies() calls in the projects list API.
- */
-export function getProjectsStats(projectIds: string[]): Map<string, { companyCount: number; formFoundCount: number }> {
+export async function getProjectsStats(projectIds: string[]): Promise<Map<string, { companyCount: number; formFoundCount: number }>> {
   if (projectIds.length === 0) return new Map()
-  const db = getDb()
-  const placeholders = projectIds.map(() => '?').join(',')
-  const rows = db.prepare(`
-    SELECT projectId,
-           COUNT(*) as companyCount,
-           SUM(CASE WHEN formUrl != '' THEN 1 ELSE 0 END) as formFoundCount
+  const sql = getSql()
+  const rows = await sql`
+    SELECT
+      project_id,
+      COUNT(*)::int as company_count,
+      SUM(CASE WHEN form_url != '' THEN 1 ELSE 0 END)::int as form_found_count
     FROM companies
-    WHERE projectId IN (${placeholders})
-    GROUP BY projectId
-  `).all(projectIds) as Array<{ projectId: string; companyCount: number; formFoundCount: number }>
+    WHERE project_id = ANY(${projectIds})
+    GROUP BY project_id
+  `
   const map = new Map<string, { companyCount: number; formFoundCount: number }>()
-  for (const r of rows) map.set(r.projectId, { companyCount: r.companyCount, formFoundCount: r.formFoundCount })
+  for (const r of rows) map.set(r.project_id as string, { companyCount: r.company_count as number, formFoundCount: r.form_found_count as number })
   return map
 }
 
-export function getFormUrls(): Set<string> {
-  const db = getDb()
-  const rows = db.prepare("SELECT normalizedFormUrl FROM companies WHERE normalizedFormUrl != ''").all() as { normalizedFormUrl: string }[]
-  return new Set(rows.map(r => r.normalizedFormUrl))
+export async function getFormUrls(): Promise<Set<string>> {
+  const sql = getSql()
+  const rows = await sql`SELECT normalized_form_url FROM companies WHERE normalized_form_url != ''`
+  return new Set(rows.map(r => r.normalized_form_url as string))
 }
 
-/** Pre-load all normalized HP URLs for duplicate checking during batch inserts. */
-function getHpUrls(): Set<string> {
-  const db = getDb()
-  const rows = db.prepare("SELECT normalizedHpUrl FROM companies WHERE normalizedHpUrl != ''").all() as { normalizedHpUrl: string }[]
-  return new Set(rows.map(r => r.normalizedHpUrl))
+async function getHpUrls(): Promise<Set<string>> {
+  const sql = getSql()
+  const rows = await sql`SELECT normalized_hp_url FROM companies WHERE normalized_hp_url != ''`
+  return new Set(rows.map(r => r.normalized_hp_url as string))
 }
 
-export function addCompanies(rows: CompanyInput[]): { added: number; duplicates: number; upgraded: number } {
-  const db = getDb()
-  const existingFormUrls = getFormUrls()
-  const existingHpUrls = getHpUrls()
-  let added = 0
-  let duplicates = 0
-  let upgraded = 0
+export async function addCompanies(rows: CompanyInput[]): Promise<{ added: number; duplicates: number; upgraded: number }> {
+  const sql = getSql()
+  const [existingFormUrls, existingHpUrls] = await Promise.all([getFormUrls(), getHpUrls()])
+  let added = 0, duplicates = 0, upgraded = 0
 
-  const insert = db.prepare(`
-    INSERT INTO companies
-      (id, name, hpUrl, formUrl, normalizedFormUrl, normalizedHpUrl, phone, email, address,
-       industry, area, formType, status, notes, projectId, runId, collectedAt, importedFromSheets)
-    VALUES
-      (@id, @name, @hpUrl, @formUrl, @normalizedFormUrl, @normalizedHpUrl, @phone, @email, @address,
-       @industry, @area, @formType, @status, @notes, @projectId, @runId, @collectedAt, @importedFromSheets)
-  `)
+  for (const row of rows) {
+    const normForm = normalizeUrl(row.formUrl || '')
+    const normHp   = normalizeUrl(row.hpUrl   || '')
 
-  // Smart upsert: if existing record has no form URL but the new record does,
-  // upgrade the existing record's scraped fields. Preserves user-edited fields (status, notes).
-  const upgradeFormData = db.prepare(`
-    UPDATE companies
-    SET formUrl = @formUrl, normalizedFormUrl = @normForm,
-        phone    = CASE WHEN phone    = '' THEN @phone    ELSE phone    END,
-        email    = CASE WHEN email    = '' THEN @email    ELSE email    END,
-        address  = CASE WHEN address  = '' THEN @address  ELSE address  END,
-        formType = @formType
-    WHERE id = @id AND formUrl = ''
-  `)
-  const findByHpUrl = db.prepare(`SELECT id FROM companies WHERE normalizedHpUrl = @normHp AND formUrl = '' LIMIT 1`)
+    if (normForm && existingFormUrls.has(normForm)) { duplicates++; continue }
 
-  const addMany = db.transaction((rows: CompanyInput[]) => {
-    for (const row of rows) {
-      const normForm = normalizeUrl(row.formUrl || '')
-      const normHp   = normalizeUrl(row.hpUrl || '')
-
-      // Dedup on form URL (primary — same form = same company)
-      if (normForm && existingFormUrls.has(normForm)) {
-        duplicates++
-        continue
-      }
-      // Dedup on HP URL (secondary — same website = same company, even if no form)
-      if (normHp && existingHpUrls.has(normHp)) {
-        // Smart upsert: if the new record has a form URL and the existing doesn't, upgrade it
-        if (normForm && row.formUrl) {
-          const existing = findByHpUrl.get({ normHp }) as { id: string } | undefined
-          if (existing) {
-            const resolvedFormType = isLineUrl(row.formUrl) ? 'LINE' : (row.formType === 'booking' ? 'reservation' : (row.formType || ''))
-            upgradeFormData.run({
-              id: existing.id,
-              formUrl: row.formUrl,
-              normForm,
-              phone: row.phone || '',
-              email: row.email || '',
-              address: row.address || '',
-              formType: resolvedFormType,
-            })
-            existingFormUrls.add(normForm)
-            upgraded++
-          } else {
-            duplicates++
-          }
-        } else {
-          duplicates++
-        }
-        continue
-      }
-
-      // Normalise form type:
-      // - LINE messenger URLs always override to 'LINE' regardless of GPT stub classification
-      // - 'booking' is the scraper-internal hint; persist as 'reservation' in the DB
-      const resolvedFormType = row.formUrl && isLineUrl(row.formUrl)
-        ? 'LINE'
-        : (row.formType === 'booking' ? 'reservation' : (row.formType || ''))
-      insert.run({
-        id: generateId(),
-        name: row.name || '',
-        hpUrl: row.hpUrl || '',
-        formUrl: row.formUrl || '',
-        normalizedFormUrl: normForm,
-        normalizedHpUrl: normHp,
-        phone: row.phone || '',
-        email: row.email || '',
-        address: row.address || '',
-        industry: row.industry || '',
-        area: row.area || '',
-        formType: resolvedFormType,
-        status: row.status || '未送信',
-        notes: row.notes || '',
-        projectId: row.projectId || '',
-        runId: row.runId || '',
-        collectedAt: row.collectedAt || new Date().toISOString(),
-        importedFromSheets: row.importedFromSheets ? 1 : 0,
-      })
-      if (normForm) existingFormUrls.add(normForm)
-      if (normHp) existingHpUrls.add(normHp)
-      added++
+    if (normHp && existingHpUrls.has(normHp)) {
+      if (normForm && row.formUrl) {
+        const existing = await sql`SELECT id FROM companies WHERE normalized_hp_url = ${normHp} AND form_url = '' LIMIT 1`
+        if (existing.length > 0) {
+          const resolvedFormType = isLineUrl(row.formUrl) ? 'LINE' : (row.formType === 'booking' ? 'reservation' : (row.formType || ''))
+          await sql`
+            UPDATE companies SET
+              form_url = ${row.formUrl},
+              normalized_form_url = ${normForm},
+              phone    = CASE WHEN phone    = '' THEN ${row.phone    || ''} ELSE phone    END,
+              email    = CASE WHEN email    = '' THEN ${row.email    || ''} ELSE email    END,
+              address  = CASE WHEN address  = '' THEN ${row.address  || ''} ELSE address  END,
+              form_type = ${resolvedFormType}
+            WHERE id = ${existing[0].id as string} AND form_url = ''
+          `
+          existingFormUrls.add(normForm)
+          upgraded++
+        } else { duplicates++ }
+      } else { duplicates++ }
+      continue
     }
-  })
 
-  addMany(rows)
+    const resolvedFormType = row.formUrl && isLineUrl(row.formUrl)
+      ? 'LINE'
+      : (row.formType === 'booking' ? 'reservation' : (row.formType || ''))
+
+    await sql`
+      INSERT INTO companies
+        (id, name, hp_url, form_url, normalized_form_url, normalized_hp_url,
+         phone, email, address, industry, area, form_type, status, notes,
+         project_id, run_id, collected_at, imported_from_sheets)
+      VALUES (
+        ${generateId()},
+        ${row.name || ''},
+        ${row.hpUrl || ''},
+        ${row.formUrl || ''},
+        ${normForm},
+        ${normHp},
+        ${row.phone   || ''},
+        ${row.email   || ''},
+        ${row.address || ''},
+        ${row.industry || ''},
+        ${row.area     || ''},
+        ${resolvedFormType},
+        ${row.status   || '未送信'},
+        ${row.notes    || ''},
+        ${row.projectId || ''},
+        ${row.runId     || ''},
+        ${row.collectedAt || new Date().toISOString()},
+        ${row.importedFromSheets ?? false}
+      )
+    `
+    if (normForm) existingFormUrls.add(normForm)
+    if (normHp)   existingHpUrls.add(normHp)
+    added++
+  }
+
   return { added, duplicates, upgraded }
 }
 
-export function removeByRunId(runId: string): number {
-  const db = getDb()
-  const result = db.prepare('DELETE FROM companies WHERE runId = @runId').run({ runId })
-  return result.changes
+export async function removeByRunId(runId: string): Promise<number> {
+  const sql = getSql()
+  const result = await sql`DELETE FROM companies WHERE run_id = ${runId}`
+  return result.count
 }
 
-/** Update one or more fields of a single company. Returns true if found. */
-export function updateCompany(id: string, updates: { status?: string; notes?: string }): boolean {
-  const db = getDb()
+export async function updateCompany(id: string, updates: { status?: string; notes?: string }): Promise<boolean> {
+  const sql = getSql()
   const sets: string[] = []
-  const params: Record<string, string> = { id }
-  if (updates.status !== undefined) { sets.push('status = @status'); params.status = updates.status }
-  if (updates.notes  !== undefined) { sets.push('notes = @notes');   params.notes  = updates.notes  }
+  if (updates.status !== undefined) sets.push(`status = '${updates.status.replace(/'/g, "''")}'`)
+  if (updates.notes  !== undefined) sets.push(`notes  = '${updates.notes.replace(/'/g, "''")}'`)
   if (sets.length === 0) return false
-  const result = db.prepare(`UPDATE companies SET ${sets.join(', ')} WHERE id = @id`).run(params)
-  return result.changes > 0
+  const result = await sql`UPDATE companies SET ${sql.unsafe(sets.join(', '))} WHERE id = ${id}`
+  return result.count > 0
 }
 
-/** Update status of a single company. Returns true if found. */
-export function updateCompanyStatus(id: string, status: string): boolean {
-  return updateCompany(id, { status })
-}
-
-/** Batch update status for multiple companies. Returns number of rows updated. */
-export function batchUpdateStatus(ids: string[], status: string): number {
+export async function batchUpdateStatus(ids: string[], status: string): Promise<number> {
   if (ids.length === 0) return 0
-  const db = getDb()
-  const placeholders = ids.map(() => '?').join(',')
-  const result = db.prepare(`UPDATE companies SET status = ? WHERE id IN (${placeholders})`).run(status, ...ids)
-  return result.changes
+  const sql = getSql()
+  const result = await sql`UPDATE companies SET status = ${status} WHERE id = ANY(${ids})`
+  return result.count
 }
 
-/** Batch update status for all companies matching a filter (for "select all pages" UX). Returns updated count. */
-export function batchUpdateStatusByFilter(
+export async function batchUpdateStatusByFilter(
   filters: Omit<CompanyFilters, 'limit' | 'offset' | 'ids' | 'sortBy' | 'sortDir'>,
   status: string
-): number {
-  const db = getDb()
-  const clauses: string[] = []
-  const params: Record<string, string> = {}
-
-  if (filters.projectId) { clauses.push('projectId = @projectId'); params.projectId = filters.projectId }
-  if (filters.runId)     { clauses.push('runId = @runId');         params.runId = filters.runId }
-  if (filters.industry)  { clauses.push('industry = @industry');   params.industry = filters.industry }
-  if (filters.area)      { clauses.push('area = @area');           params.area = filters.area }
-  if (filters.status)    { clauses.push('status = @currentStatus'); params.currentStatus = filters.status }
-  if (filters.formType)  { clauses.push('formType = @formType');   params.formType = filters.formType }
-  if (filters.search) {
-    const q = `%${filters.search.toLowerCase()}%`
-    clauses.push('(LOWER(name) LIKE @search OR LOWER(hpUrl) LIKE @search OR LOWER(formUrl) LIKE @search OR LOWER(address) LIKE @search OR phone LIKE @search OR LOWER(email) LIKE @search OR LOWER(notes) LIKE @search)')
-    params.search = q
-  }
-  if (filters.hasForm === 'true')  clauses.push("formUrl != ''")
-  if (filters.hasForm === 'false') clauses.push("formUrl = ''")
-  if (filters.hasPhone === 'true') clauses.push("phone != ''")
-  if (filters.hasEmail === 'true') clauses.push("email != ''")
-
-  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
-  const result = db.prepare(`UPDATE companies SET status = @newStatus ${where}`)
-    .run({ ...params, newStatus: status })
-  return result.changes
+): Promise<number> {
+  const sql = getSql()
+  const result = await sql`
+    UPDATE companies SET status = ${status}
+    WHERE TRUE
+      ${filters?.projectId ? sql`AND project_id = ${filters.projectId}` : sql``}
+      ${filters?.runId     ? sql`AND run_id = ${filters.runId}` : sql``}
+      ${filters?.industry  ? sql`AND industry = ${filters.industry}` : sql``}
+      ${filters?.area      ? sql`AND area = ${filters.area}` : sql``}
+      ${filters?.status    ? sql`AND status = ${filters.status}` : sql``}
+      ${filters?.formType  ? sql`AND form_type = ${filters.formType}` : sql``}
+      ${filters?.search    ? sql`AND (
+        LOWER(name) LIKE ${'%' + filters.search.toLowerCase() + '%'}
+        OR LOWER(hp_url) LIKE ${'%' + filters.search.toLowerCase() + '%'}
+        OR LOWER(form_url) LIKE ${'%' + filters.search.toLowerCase() + '%'}
+      )` : sql``}
+      ${filters?.hasForm  === 'true'  ? sql`AND form_url != ''` : sql``}
+      ${filters?.hasForm  === 'false' ? sql`AND form_url = ''`  : sql``}
+      ${filters?.hasPhone === 'true'  ? sql`AND phone != ''`    : sql``}
+      ${filters?.hasEmail === 'true'  ? sql`AND email != ''`    : sql``}
+  `
+  return result.count
 }
 
-/** @deprecated Use countCompanies instead */
-export function getCompanyCount(filters?: CompanyFilters): number {
+/** @deprecated */
+export async function getCompanyCount(filters?: CompanyFilters): Promise<number> {
   return countCompanies(filters)
 }
 
-// ── Google Sheets mapping ─────────────────────────────────────────
-
-export function mapSheetRowToInput(row: import('./types').CompanyRow): CompanyInput {
+export function mapSheetRowToInput(row: CompanyRow): CompanyInput {
   return {
-    name:              row['会社名'],
-    hpUrl:             row['HP URL'],
-    formUrl:           row['フォームURL'],
-    phone:             row['電話番号'],
-    email:             row['メールアドレス'],
-    address:           row['住所'],
-    industry:          row['業種'],
-    area:              row['エリア'],
-    formType:          row['フォーム種別'],
-    status:            row['ステータス'] || '未送信',
-    notes:             row['備考'],
-    projectId:         row['プロジェクトID'],
-    runId:             row['実行ID'],
-    collectedAt:       row['収集日時'] || new Date().toISOString(),
+    name:               row['会社名'],
+    hpUrl:              row['HP URL'],
+    formUrl:            row['フォームURL'],
+    phone:              row['電話番号'],
+    email:              row['メールアドレス'],
+    address:            row['住所'],
+    industry:           row['業種'],
+    area:               row['エリア'],
+    formType:           row['フォーム種別'],
+    status:             row['ステータス'] || '未送信',
+    notes:              row['備考'],
+    projectId:          row['プロジェクトID'],
+    runId:              row['実行ID'],
+    collectedAt:        row['収集日時'] || new Date().toISOString(),
     importedFromSheets: true,
   }
-}
-
-// ── Legacy JSON migration (one-time import) ───────────────────────
-export function migrateFromJson(): { migrated: number; skipped: number } {
-  const jsonFile = path.join(DATA_DIR, 'companies.json')
-  if (!fs.existsSync(jsonFile)) return { migrated: 0, skipped: 0 }
-
-  const raw = JSON.parse(fs.readFileSync(jsonFile, 'utf-8'))
-  const rows: CompanyInput[] = (raw.companies || []).map((c: Company) => ({
-    name:              c.name,
-    hpUrl:             c.hpUrl,
-    formUrl:           c.formUrl,
-    phone:             c.phone,
-    email:             c.email,
-    address:           c.address,
-    industry:          c.industry,
-    area:              c.area,
-    formType:          c.formType,
-    status:            c.status,
-    notes:             c.notes,
-    projectId:         c.projectId,
-    runId:             c.runId,
-    collectedAt:       c.collectedAt,
-    importedFromSheets: !!c.importedFromSheets,
-  }))
-
-  const { added, duplicates } = addCompanies(rows)
-  return { migrated: added, skipped: duplicates }
 }

@@ -62,7 +62,7 @@ export async function syncRun(runId: string, n8nExecutionId: string): Promise<bo
       // Token extraction is best-effort
     }
 
-    updateRunStatus(runId, finalStatus, n8nExecutionId, undefined, {
+    await updateRunStatus(runId, finalStatus, n8nExecutionId, undefined, {
       tokensInput,
       tokensOutput,
       estimatedCostUsd,
@@ -70,7 +70,7 @@ export async function syncRun(runId: string, n8nExecutionId: string): Promise<bo
     })
 
     // Also mark the queue job as done and trigger next
-    const nextJob = markJobDone(runId, finalStatus === 'success' ? 'completed' : 'failed')
+    const nextJob = await markJobDone(runId, finalStatus === 'success' ? 'completed' : 'failed')
     if (nextJob) {
       // Fire the next queued job in the background
       triggerQueuedJob(nextJob.runId, nextJob.params).catch(() => {})
@@ -87,12 +87,13 @@ export async function syncRun(runId: string, n8nExecutionId: string): Promise<bo
  * Designed to be called on-demand (e.g., when loading history/project pages).
  */
 export async function syncAllRunningJobs(): Promise<{ synced: number }> {
-  const projects = getProjects()
+  const projects = await getProjects()
   let synced = 0
 
+  const runsLists = await Promise.all(projects.map((p) => getRunsForProject(p.id)))
   await Promise.allSettled(
-    projects.flatMap((p) =>
-      getRunsForProject(p.id)
+    runsLists.flatMap((runs) =>
+      runs
         .filter((r) => r.status === 'running' && r.n8nExecutionId)
         .map(async (r) => {
           const changed = await syncRun(r.id, r.n8nExecutionId!)

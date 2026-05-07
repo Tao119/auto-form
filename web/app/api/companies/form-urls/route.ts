@@ -11,10 +11,10 @@ export async function GET(req: NextRequest) {
     let formUrls: string[]
 
     if (projectId) {
-      const companies = getCompanies({ projectId })
+      const companies = await getCompanies({ projectId })
       formUrls = companies.map((c) => c.normalizedFormUrl).filter(Boolean)
     } else {
-      formUrls = Array.from(getFormUrls())
+      formUrls = Array.from(await getFormUrls())
     }
 
     return NextResponse.json({ success: true, formUrls })

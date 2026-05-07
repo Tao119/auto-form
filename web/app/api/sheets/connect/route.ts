@@ -15,7 +15,7 @@ const Schema = z.object({ projectId: z.string().min(1) })
 export async function POST(req: NextRequest) {
   try {
     const { projectId } = Schema.parse(await req.json())
-    const project = getProject(projectId)
+    const project = await getProject(projectId)
     if (!project) return NextResponse.json({ success: false, error: 'Project not found' }, { status: 404 })
 
     // すでに紐付き済み
@@ -79,7 +79,7 @@ export async function POST(req: NextRequest) {
     // 必要なら drive.permissions.create で共有追加可
 
     // プロジェクトに紐付け
-    linkSheets(projectId, sheetsId)
+    await linkSheets(projectId, sheetsId)
 
     const url = `https://docs.google.com/spreadsheets/d/${sheetsId}`
     return NextResponse.json({ success: true, sheetsId, url, created: true })
