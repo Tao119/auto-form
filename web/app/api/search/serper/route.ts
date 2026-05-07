@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 
-export const maxDuration = 600
+export const maxDuration = 300
 
 const Schema = z.object({
   keywords:   z.array(z.string()).min(1),
