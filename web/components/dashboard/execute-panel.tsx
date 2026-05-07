@@ -1,24 +1,29 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Play, Loader2, CheckCircle2, XCircle, ChevronDown, Plus, FolderOpen, Database, X, Hash, ExternalLink, Square, Sparkles } from 'lucide-react'
+import { Play, Loader2, CheckCircle2, XCircle, ChevronDown, Plus, FolderOpen, X, ExternalLink, Square, Sparkles, MapPin, Briefcase, Hash, Database } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import type { Preset, Project, SearchProvider } from '@/lib/types'
 import { estimateCost } from '@/lib/area-data'
 import { ProjectCreateModal } from '@/components/modals/project-create-modal'
 
-const INDUSTRIES = ['美容室', 'ヘアサロン', 'エステサロン', '美容クリニック', '歯科医院', '整骨院', '中古車販売', 'その他']
+const HISTORY_KEY = 'execute_panel_history'
+const MAX_HISTORY = 20
 
-const AREAS_BY_REGION: Record<string, string[]> = {
-  '北海道・東北': ['北海道', '青森県', '岩手県', '宮城県', '秋田県', '山形県', '福島県'],
-  '関東':         ['東京都', '神奈川県', '埼玉県', '千葉県', '茨城県', '栃木県', '群馬県'],
-  '中部':         ['愛知県', '静岡県', '新潟県', '長野県', '山梨県', '岐阜県', '富山県', '石川県', '福井県'],
-  '近畿':         ['大阪府', '兵庫県', '京都府', '奈良県', '和歌山県', '滋賀県', '三重県'],
-  '中国・四国':   ['広島県', '岡山県', '鳥取県', '島根県', '山口県', '香川県', '愛媛県', '高知県', '徳島県'],
-  '九州・沖縄':   ['福岡県', '熊本県', '鹿児島県', '長崎県', '大分県', '宮崎県', '佐賀県', '沖縄県'],
+function loadHistory(): { areas: string[]; industries: string[] } {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY)
+    return raw ? JSON.parse(raw) : { areas: [], industries: [] }
+  } catch { return { areas: [], industries: [] } }
 }
-
-const ALL_AREAS = Object.values(AREAS_BY_REGION).flat()
+function saveToHistory(area: string, industry: string) {
+  try {
+    const h = loadHistory()
+    const areas = [area, ...h.areas.filter((a) => a !== area)].slice(0, MAX_HISTORY)
+    const industries = [industry, ...h.industries.filter((i) => i !== industry)].slice(0, MAX_HISTORY)
+    localStorage.setItem(HISTORY_KEY, JSON.stringify({ areas, industries }))
+  } catch {}
+}
 
 // 実測データに基づく最適キーワード設定 (2026-04-19 検証済み)
 // 追加kwの限界効率が1kwの50%を下回る場合はkw数を増やさない
@@ -58,7 +63,7 @@ function generateRunId() {
 const EP_STORAGE_KEY = 'execute_panel_settings'
 
 function loadPanelSettings(): {
-  industry?: string; customIndustry?: string
+  industry?: string
   selectedAreas?: string[]; maxResults?: number; selectedProjectId?: string
 } {
   try {
@@ -76,10 +81,21 @@ export default function ExecutePanel() {
   // Load persisted settings once on mount
   const [_settingsLoaded, setSettingsLoaded] = useState(false)
   const [industry, setIndustry] = useState('美容室')
-  const [customIndustry, setCustomIndustry] = useState('')
-  const [selectedAreas, setSelectedAreas] = useState<string[]>(['東京都'])
-  const [areaDropdownOpen, setAreaDropdownOpen] = useState(false)
-  const areaDropdownRef = useRef<HTMLDivElement>(null)
+  const [areaInput, setAreaInput] = useState('東京都')
+  const [areaError, setAreaError] = useState('')
+  const [areaValidating, setAreaValidating] = useState(false)
+  const [areaValid, setAreaValid] = useState<boolean | null>(null)
+  const [areaSuggestions, setAreaSuggestions] = useState<string[]>([])
+  const [showAreaSuggestions, setShowAreaSuggestions] = useState(false)
+  const [industrySuggestions, setIndustrySuggestions] = useState<string[]>([])
+  const [showIndustrySuggestions, setShowIndustrySuggestions] = useState(false)
+  const areaInputRef = useRef<HTMLInputElement>(null)
+  const industryInputRef = useRef<HTMLInputElement>(null)
+  const areaSuggestRef = useRef<HTMLDivElement>(null)
+  const industrySuggestRef = useRef<HTMLDivElement>(null)
+
+  // legacy — keep for preset compatibility
+  const selectedAreas = [areaInput].filter(Boolean)
 
   const [status, setStatus] = useState<Status>('idle')
   const [log, setLog] = useState('')
@@ -112,17 +128,20 @@ export default function ExecutePanel() {
   const firstItemTimeRef = useRef<number | null>(null)
   const prevLiveCountRef = useRef<number>(0)
 
-  const actualIndustry = industry === 'その他' ? customIndustry : industry
+  const actualIndustry = industry
   const isRunning = status === 'running' || status === 'queued'
-  const canExecute = !isRunning && !!actualIndustry && !!selectedProjectId && selectedAreas.length > 0
+  const canExecute = !isRunning && !!actualIndustry && !!selectedProjectId && !!areaInput && areaValid !== false
 
   // Restore persisted settings on first mount
   useEffect(() => {
     const s = loadPanelSettings()
     if (s.industry) setIndustry(s.industry)
-    if (s.customIndustry) setCustomIndustry(s.customIndustry)
-    if (Array.isArray(s.selectedAreas) && s.selectedAreas.length > 0) setSelectedAreas(s.selectedAreas)
+    if (Array.isArray(s.selectedAreas) && s.selectedAreas.length > 0) setAreaInput(s.selectedAreas[0])
     if (s.maxResults !== undefined) setMaxResults(s.maxResults)
+    // Pre-load history for suggestions
+    const h = loadHistory()
+    setAreaSuggestions(h.areas)
+    setIndustrySuggestions(h.industries)
     setSettingsLoaded(true)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -130,14 +149,49 @@ export default function ExecutePanel() {
   // Persist settings whenever they change (after initial load)
   useEffect(() => {
     if (!_settingsLoaded) return
-    savePanelSettings({ industry, customIndustry, selectedAreas, maxResults, selectedProjectId })
-  }, [_settingsLoaded, industry, customIndustry, selectedAreas, maxResults, selectedProjectId])
+    savePanelSettings({ industry, selectedAreas: [areaInput], maxResults, selectedProjectId })
+  }, [_settingsLoaded, industry, areaInput, maxResults, selectedProjectId])
+
+  // Validate area input (debounced 800ms)
+  useEffect(() => {
+    if (!areaInput.trim()) { setAreaValid(null); setAreaError(''); return }
+    setAreaValid(null)
+    setAreaError('')
+    setAreaValidating(true)
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch('/api/search/validate-area', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ area: areaInput.trim() }),
+        })
+        const data = await res.json()
+        setAreaValid(data.valid !== false)
+        if (data.valid === false) setAreaError(`「${areaInput}」は地名として認識できませんでした`)
+        else setAreaError('')
+      } catch {
+        setAreaValid(true) // network error → don't block
+      } finally {
+        setAreaValidating(false)
+      }
+    }, 800)
+    return () => { clearTimeout(t); setAreaValidating(false) }
+  }, [areaInput])
+
+  // Close suggestion dropdowns on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (areaSuggestRef.current && !areaSuggestRef.current.contains(e.target as Node)) setShowAreaSuggestions(false)
+      if (industrySuggestRef.current && !industrySuggestRef.current.contains(e.target as Node)) setShowIndustrySuggestions(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
 
   // Fetch AI keyword suggestions whenever the industry changes (debounced 600ms)
   useEffect(() => {
     if (!actualIndustry) return
-    // Immediately seed with static fallback so the field is never empty
-    setKeywords(KEYWORDS_MAP[actualIndustry] ?? [actualIndustry])
+    setKeywords([actualIndustry])
     setKeywordsLoading(true)
     const t = setTimeout(async () => {
       try {
@@ -151,7 +205,7 @@ export default function ExecutePanel() {
           setKeywords(data.keywords)
         }
       } catch {
-        // keep static fallback on error
+        // keep fallback on error
       } finally {
         setKeywordsLoading(false)
       }
@@ -159,17 +213,6 @@ export default function ExecutePanel() {
     return () => { clearTimeout(t); setKeywordsLoading(false) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [actualIndustry])
-
-  // Close area dropdown on outside click
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (areaDropdownRef.current && !areaDropdownRef.current.contains(e.target as Node)) {
-        setAreaDropdownOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [])
 
   // Close preset dropdown on outside click
   useEffect(() => {
@@ -232,22 +275,6 @@ export default function ExecutePanel() {
     return () => clearInterval(t)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const toggleArea = (a: string) => {
-    setSelectedAreas((prev) =>
-      prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a]
-    )
-  }
-
-  const selectRegion = (region: string) => {
-    const areas = AREAS_BY_REGION[region]
-    const allSelected = areas.every((a) => selectedAreas.includes(a))
-    if (allSelected) {
-      setSelectedAreas((prev) => prev.filter((a) => !areas.includes(a)))
-    } else {
-      setSelectedAreas((prev) => Array.from(new Set([...prev, ...areas])))
-    }
-  }
-
   // Poll a single run and return its final status; updates live counters along the way
   const pollSingleRun = useCallback((runId: string): Promise<'success' | 'error'> => {
     return new Promise((resolve) => {
@@ -290,7 +317,11 @@ export default function ExecutePanel() {
   }, [])
 
   const handleExecute = async () => {
-    if (!actualIndustry || !selectedProjectId || selectedAreas.length === 0) return
+    if (!actualIndustry || !selectedProjectId || !areaInput) return
+    saveToHistory(areaInput.trim(), actualIndustry)
+    const h = loadHistory()
+    setAreaSuggestions(h.areas)
+    setIndustrySuggestions(h.industries)
 
     setStatus('running')
     setItemsWritten(0)
@@ -408,15 +439,10 @@ export default function ExecutePanel() {
 
   const loadPreset = (preset: Preset) => {
     const t = preset.searchTarget
-    if (INDUSTRIES.includes(t.industry)) {
-      setIndustry(t.industry)
-    } else {
-      setIndustry('その他')
-      setCustomIndustry(t.industry)
-    }
-    // area may be comma-separated (multi-area preset)
-    const areas = t.area.includes(',') ? t.area.split(',').map((a) => a.trim()).filter(Boolean) : [t.area]
-    setSelectedAreas(areas)
+    setIndustry(t.industry)
+    // area may be comma-separated — take first one
+    const area = t.area.includes(',') ? t.area.split(',')[0].trim() : t.area
+    setAreaInput(area)
     if (t.maxResults) setMaxResults(t.maxResults)
     setShowPresets(false)
   }
@@ -426,8 +452,8 @@ export default function ExecutePanel() {
     if (!name) return
     setSavingPreset(true)
     try {
-      const activeKeywords = keywords.length > 0 ? keywords : (KEYWORDS_MAP[actualIndustry] ?? [actualIndustry])
-      const area = selectedAreas.length === 1 ? selectedAreas[0] : selectedAreas.join(',')
+      const activeKeywords = keywords.length > 0 ? keywords : [actualIndustry]
+      const area = areaInput.trim()
       await fetch('/api/config/presets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -561,144 +587,77 @@ export default function ExecutePanel() {
       {/* Search params */}
       <div className="space-y-3">
       <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
-        {/* Industry */}
-        <div>
-          <label className="block text-xs text-gray-500 mb-1">業種</label>
-          <select
+        {/* Industry — free text */}
+        <div className="relative" ref={industrySuggestRef}>
+          <label className="block text-xs text-gray-500 mb-1 flex items-center gap-1">
+            <Briefcase className="w-3 h-3" />業種
+          </label>
+          <input
+            ref={industryInputRef}
+            type="text"
             value={industry}
             onChange={(e) => setIndustry(e.target.value)}
-            className="w-full bg-white border border-gray-300 rounded px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none"
+            onFocus={() => { if (industrySuggestions.length > 0) setShowIndustrySuggestions(true) }}
+            placeholder="例: 美容室、整骨院、歯科医院..."
             disabled={isRunning}
-          >
-            {INDUSTRIES.map((i) => <option key={i}>{i}</option>)}
-          </select>
-          {industry === 'その他' && (
-            <input
-              type="text"
-              value={customIndustry}
-              onChange={(e) => setCustomIndustry(e.target.value)}
-              placeholder="業種を入力..."
-              className="mt-1 w-full bg-white border border-gray-300 rounded px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none"
-            />
+            className="w-full bg-white border border-gray-300 rounded px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none disabled:opacity-50"
+          />
+          {showIndustrySuggestions && industrySuggestions.length > 0 && (
+            <div className="absolute z-20 top-full mt-1 left-0 right-0 bg-white border border-gray-200 rounded shadow-md max-h-48 overflow-y-auto">
+              {industrySuggestions
+                .filter((s) => s.toLowerCase().includes(industry.toLowerCase()) || industry === '')
+                .slice(0, 8)
+                .map((s) => (
+                  <button key={s} type="button"
+                    onMouseDown={(e) => { e.preventDefault(); setIndustry(s); setShowIndustrySuggestions(false) }}
+                    className="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
+                  >
+                    {s}
+                  </button>
+                ))}
+            </div>
           )}
         </div>
 
-        {/* Prefecture multi-select */}
-        <div ref={areaDropdownRef}>
-          <div className="flex items-center justify-between mb-1">
-            <label className="text-xs text-gray-500">エリア</label>
-            <span className="text-xs text-gray-400">{selectedAreas.length} 選択中</span>
-          </div>
-
-          {/* Trigger button */}
-          <button
-            type="button"
-            onClick={() => setAreaDropdownOpen((v) => !v)}
-            disabled={isRunning}
-            className="w-full bg-white border border-gray-300 rounded px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none flex items-center justify-between disabled:opacity-50"
-          >
-            <span className="truncate text-left">
-              {selectedAreas.length === 0
-                ? 'エリアを選択...'
-                : selectedAreas.length === ALL_AREAS.length
-                ? '全都道府県'
-                : selectedAreas.length <= 3
-                ? selectedAreas.join('・')
-                : `${selectedAreas.slice(0, 2).join('・')} 他${selectedAreas.length - 2}件`}
-            </span>
-            <ChevronDown className={`w-4 h-4 text-gray-400 flex-shrink-0 transition-transform ${areaDropdownOpen ? 'rotate-180' : ''}`} />
-          </button>
-
-          {/* Dropdown panel */}
-          {areaDropdownOpen && (
-            <div className="absolute z-20 mt-1 bg-white border border-gray-200 rounded shadow-lg w-80 max-h-96 overflow-y-auto">
-              {/* Quick actions */}
-              <div className="flex gap-2 px-3 py-2 border-b border-gray-100 bg-gray-50 sticky top-0">
-                <button
-                  onClick={() => setSelectedAreas([...ALL_AREAS])}
-                  className="text-xs text-blue-600 hover:text-blue-800 font-medium"
-                >
-                  全選択
-                </button>
-                <span className="text-gray-300">|</span>
-                <button
-                  onClick={() => setSelectedAreas([])}
-                  className="text-xs text-gray-500 hover:text-gray-700"
-                >
-                  全解除
-                </button>
-                <span className="text-gray-300">|</span>
-                <button
-                  onClick={() => setSelectedAreas(['東京都', '大阪府', '神奈川県', '愛知県', '福岡県'])}
-                  className="text-xs text-gray-500 hover:text-gray-700"
-                >
-                  主要5都市
-                </button>
-              </div>
-
-              {/* Regions */}
-              {Object.entries(AREAS_BY_REGION).map(([region, areas]) => {
-                const allSelected = areas.every((a) => selectedAreas.includes(a))
-                const someSelected = areas.some((a) => selectedAreas.includes(a))
-                return (
-                  <div key={region} className="border-b border-gray-50 last:border-0">
-                    <button
-                      onClick={() => selectRegion(region)}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 bg-gray-50 hover:bg-gray-100 text-left"
-                    >
-                      <span className={`w-3 h-3 rounded-sm border flex-shrink-0 flex items-center justify-center text-white text-[9px] ${
-                        allSelected ? 'bg-blue-500 border-blue-500' : someSelected ? 'bg-blue-200 border-blue-300' : 'border-gray-300'
-                      }`}>
-                        {allSelected ? '✓' : someSelected ? '−' : ''}
-                      </span>
-                      <span className="text-xs font-medium text-gray-600">{region}</span>
-                      <span className="text-xs text-gray-400 ml-auto">
-                        {areas.filter(a => selectedAreas.includes(a)).length}/{areas.length}
-                      </span>
-                    </button>
-                    <div className="grid grid-cols-3 gap-0.5 px-2 py-1">
-                      {areas.map((a) => (
-                        <button
-                          key={a}
-                          onClick={() => toggleArea(a)}
-                          className={`flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors ${
-                            selectedAreas.includes(a)
-                              ? 'bg-blue-100 text-blue-700 font-medium'
-                              : 'text-gray-600 hover:bg-gray-100'
-                          }`}
-                        >
-                          <span className={`w-2.5 h-2.5 rounded-sm border flex-shrink-0 ${
-                            selectedAreas.includes(a) ? 'bg-blue-500 border-blue-500' : 'border-gray-300'
-                          }`} />
-                          {a.replace(/[都道府県]$/, '')}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )
-              })}
+        {/* Area — free text with validation */}
+        <div className="relative" ref={areaSuggestRef}>
+          <label className="block text-xs text-gray-500 mb-1 flex items-center gap-1">
+            <MapPin className="w-3 h-3" />エリア
+          </label>
+          <div className="relative">
+            <input
+              ref={areaInputRef}
+              type="text"
+              value={areaInput}
+              onChange={(e) => { setAreaInput(e.target.value); setAreaValid(null) }}
+              onFocus={() => { if (areaSuggestions.length > 0) setShowAreaSuggestions(true) }}
+              placeholder="例: 渋谷区、新宿駅周辺、横浜市..."
+              disabled={isRunning}
+              className={`w-full bg-white border rounded px-3 py-2 text-sm text-gray-900 focus:outline-none disabled:opacity-50 ${
+                areaError ? 'border-red-400 focus:border-red-400' :
+                areaValid === true ? 'border-green-400 focus:border-green-400' :
+                'border-gray-300 focus:border-blue-500'
+              }`}
+            />
+            <div className="absolute right-2 top-1/2 -translate-y-1/2">
+              {areaValidating && <Loader2 className="w-3.5 h-3.5 text-gray-400 animate-spin" />}
+              {!areaValidating && areaValid === true && <span className="text-green-500 text-xs">✓</span>}
             </div>
-          )}
-
-          {/* Selected area pills */}
-          {selectedAreas.length > 0 && !areaDropdownOpen && (
-            <div className="flex flex-wrap gap-1 mt-1.5">
-              {selectedAreas.slice(0, 8).map((a) => (
-                <span
-                  key={a}
-                  className="inline-flex items-center gap-0.5 bg-blue-50 text-blue-700 text-xs px-1.5 py-0.5 rounded"
-                >
-                  {a.replace(/[都道府県]$/, '')}
-                  {!isRunning && (
-                    <button onClick={() => toggleArea(a)} className="hover:text-blue-900 ml-0.5">
-                      <X className="w-2.5 h-2.5" />
-                    </button>
-                  )}
-                </span>
-              ))}
-              {selectedAreas.length > 8 && (
-                <span className="text-xs text-gray-400 py-0.5">+{selectedAreas.length - 8}</span>
-              )}
+          </div>
+          {areaError && <p className="mt-1 text-xs text-red-500">{areaError}</p>}
+          {showAreaSuggestions && areaSuggestions.length > 0 && (
+            <div className="absolute z-20 top-full mt-1 left-0 right-0 bg-white border border-gray-200 rounded shadow-md max-h-48 overflow-y-auto">
+              {areaSuggestions
+                .filter((s) => s.toLowerCase().includes(areaInput.toLowerCase()) || areaInput === '')
+                .slice(0, 8)
+                .map((s) => (
+                  <button key={s} type="button"
+                    onMouseDown={(e) => { e.preventDefault(); setAreaInput(s); setShowAreaSuggestions(false) }}
+                    className="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
+                  >
+                    {s}
+                  </button>
+                ))}
             </div>
           )}
         </div>
