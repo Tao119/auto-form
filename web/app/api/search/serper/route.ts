@@ -7,6 +7,7 @@ const Schema = z.object({
   keywords:   z.array(z.string()).min(1),
   area:       z.string().min(1),
   maxResults: z.number().int().min(0).default(50),  // 0 or large number = unlimited
+  suffixes:   z.array(z.string()).optional(),        // AI判定で100件超え時に追加される修飾語
 })
 
 type SerperItem = {
@@ -182,9 +183,12 @@ export async function POST(req: NextRequest) {
       ? 10
       : Math.min(10, Math.max(1, Math.ceil(body.maxResults / subAreas.length / 10)))
 
-    // 修飾語: 無修飾だとポータルサイトが上位を占めるため公式サイト・問い合わせページを優先
-    // 展開モード（都道府県）のみ付与 — 市区町村直接指定なら不要
-    const SUFFIXES = isExpanded ? ['お問い合わせ', '公式サイト', 'contact'] : ['']
+    // 修飾語: 都道府県展開時はデフォルト3種、それ以外はAIが100件超えと判断した場合のみ付与
+    const DEFAULT_EXPANDED_SUFFIXES = ['お問い合わせ', '公式サイト', 'contact']
+    const aiSuffixes = body.suffixes && body.suffixes.length > 0 ? body.suffixes : null
+    const SUFFIXES: string[] = isExpanded
+      ? DEFAULT_EXPANDED_SUFFIXES
+      : (aiSuffixes ?? [''])
 
     // 全クエリをリスト化して並列実行
     type QueryJob = { query: string; kw: string; subArea: string; page: number }

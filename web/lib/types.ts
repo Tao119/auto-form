@@ -159,6 +159,7 @@ export interface ExecuteParams {
   area: string
   areas?: string[]   // multi-area single-session mode
   keywords?: string[]
+  suffixes?: string[]  // AI判定で高密度エリア時のみ設定される検索修飾語
   maxResults?: number
   projectId: string
   runId: string

@@ -121,6 +121,7 @@ export default function ExecutePanel() {
 
   // AI keyword generation
   const [keywords, setKeywords] = useState<string[]>([])
+  const [suffixes, setSuffixes] = useState<string[]>([])
   const [keywordsLoading, setKeywordsLoading] = useState(false)
   const [kwInput, setKwInput] = useState('')
 
@@ -188,21 +189,27 @@ export default function ExecutePanel() {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  // Fetch AI keyword suggestions whenever the industry changes (debounced 600ms)
+  // Fetch AI keyword suggestions whenever the industry or area changes (debounced 600ms)
   useEffect(() => {
     if (!actualIndustry) return
     setKeywords([actualIndustry])
+    setSuffixes([])
     setKeywordsLoading(true)
     const t = setTimeout(async () => {
       try {
         const res = await fetch('/api/ai/keywords', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ industry: actualIndustry }),
+          body: JSON.stringify({ industry: actualIndustry, area: areaInput.trim() || undefined }),
         })
         const data = await res.json()
-        if (data.success && Array.isArray(data.keywords) && data.keywords.length > 0) {
-          setKeywords(data.keywords)
+        if (data.success) {
+          if (Array.isArray(data.keywords) && data.keywords.length > 0) {
+            setKeywords(data.keywords)
+          }
+          if (Array.isArray(data.suffixes)) {
+            setSuffixes(data.suffixes)
+          }
         }
       } catch {
         // keep fallback on error
@@ -212,7 +219,7 @@ export default function ExecutePanel() {
     }, 600)
     return () => { clearTimeout(t); setKeywordsLoading(false) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [actualIndustry])
+  }, [actualIndustry, areaInput])
 
   // Close preset dropdown on outside click
   useEffect(() => {
@@ -361,6 +368,7 @@ export default function ExecutePanel() {
             area: areaLabel,
             areas: effectiveAreas,
             keywords: activeKeywords,
+            suffixes: suffixes.length > 0 ? suffixes : undefined,
             maxResults,
             searchProvider,
           }),
@@ -709,7 +717,13 @@ export default function ExecutePanel() {
             />
           )}
         </div>
-        <p className="text-xs text-gray-400 mt-0.5">業種変更で自動再生成 · Enterで追加 · ×で削除</p>
+        <p className="text-xs text-gray-400 mt-0.5">業種・エリア変更で自動再生成 · Enterで追加 · ×で削除</p>
+        {suffixes.length > 0 && (
+          <p className="text-xs text-orange-500 mt-0.5 flex items-center gap-1">
+            <Sparkles className="w-3 h-3" />
+            高密度エリアのため修飾語を追加: {suffixes.map(s => `「${s}」`).join(' ')}
+          </p>
+        )}
       </div>
 
       {/* Cost estimate + search provider */}

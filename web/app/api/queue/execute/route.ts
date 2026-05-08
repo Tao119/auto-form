@@ -13,6 +13,7 @@ const Schema = z.object({
   area: z.string().min(1),
   areas: z.array(z.string()).optional(),            // multi-area batch mode
   keywords: z.array(z.string()).optional(),
+  suffixes: z.array(z.string()).optional(),          // AI判定で高密度エリア時のみ設定される検索修飾語
   maxResults: z.number().int().min(0).optional(),  // 0 = unlimited
   // Radius (map-based) mode
   searchMode: z.enum(['prefecture', 'radius']).optional(),
@@ -43,6 +44,7 @@ export async function POST(req: NextRequest) {
     }
 
     const keywords = execFields.keywords ?? [execFields.industry]
+    const suffixes = execFields.suffixes ?? []
     const maxResults = execFields.maxResults ?? 50
     const base = process.env.INTERNAL_BASE_URL || 'http://localhost:3003'
 
@@ -86,6 +88,7 @@ export async function POST(req: NextRequest) {
           industry: execFields.industry,
           area: child.searchTarget.area,
           keywords,
+          ...(suffixes.length > 0 && { suffixes }),
           maxResults,
           projectId,
           runId: child.id,
@@ -140,6 +143,7 @@ export async function POST(req: NextRequest) {
       industry: execFields.industry,
       area: execFields.area,
       keywords,
+      ...(suffixes.length > 0 && { suffixes }),
       maxResults,
       projectId,
       runId,
