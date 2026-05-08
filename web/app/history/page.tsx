@@ -61,9 +61,9 @@ const GPT_OUTPUT_PRICE = 0.60
 
 function CostBreakdown({ run }: { run: RunWithProject }) {
   const subArea  = (run.results as { subAreaCount?: number } | undefined)?.subAreaCount
-  const placesCost = subArea !== undefined && subArea > 0
+  const placesCost = subArea != null && subArea > 0
     ? subArea * PLACES_KW * PLACES_UNIT : 0
-  const gptCost = run.tokensInput !== undefined
+  const gptCost = run.tokensInput != null
     ? (run.tokensInput * GPT_INPUT_PRICE + (run.tokensOutput ?? 0) * GPT_OUTPUT_PRICE) / 1_000_000
     : 0
 
@@ -88,7 +88,7 @@ function CostBreakdown({ run }: { run: RunWithProject }) {
               <span className="text-green-400 font-mono">${placesCost.toFixed(3)}</span>
             </div>
           )}
-          {placesCost > 0 && subArea !== undefined && (
+          {placesCost > 0 && subArea != null && (
             <div className="text-gray-500 text-[10px] mb-1 pl-2">
               {subArea}エリア × {PLACES_KW}KW × ${PLACES_UNIT}/req
             </div>
@@ -99,7 +99,7 @@ function CostBreakdown({ run }: { run: RunWithProject }) {
               <span className="text-blue-400 font-mono">${gptCost.toFixed(4)}</span>
             </div>
           )}
-          {gptCost > 0 && run.tokensInput !== undefined && (
+          {gptCost > 0 && run.tokensInput != null && (
             <div className="text-gray-500 text-[10px] mb-1 pl-2">
               in {run.tokensInput.toLocaleString()} / out {(run.tokensOutput ?? 0).toLocaleString()} tok
             </div>
@@ -389,13 +389,13 @@ export default function HistoryPage() {
 
                   {/* Items written */}
                   <td className="px-4 py-3">
-                    {run.itemsWritten !== undefined ? (
+                    {run.itemsWritten != null ? (
                       <div className="space-y-0.5">
                         <div className="flex items-center gap-1.5 text-sm font-medium text-gray-900">
                           <Database className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" />
                           {run.itemsWritten.toLocaleString()}件
                         </div>
-                        {run.rawSearchCount !== undefined && run.rawSearchCount > 0 && (
+                        {run.rawSearchCount != null && run.rawSearchCount > 0 && (
                           <div className="flex items-center gap-1 text-xs text-gray-400">
                             <ListOrdered className="w-3 h-3 flex-shrink-0" />
                             {run.rawSearchCount.toLocaleString()}件中&nbsp;

@@ -4,7 +4,7 @@
  * even if the browser was closed during execution.
  */
 
-import { getProjects, getRunsForProject, updateRunStatus } from './project-manager'
+import { getProjects, getRunsForProject, updateRunStatus, rollupBatchRun } from './project-manager'
 import { markJobDone } from './run-queue'
 import { getExecution } from './n8n-client'
 
@@ -94,9 +94,20 @@ export async function syncAllRunningJobs(): Promise<{ synced: number }> {
   await Promise.allSettled(
     runsLists.flatMap((runs) =>
       runs
-        .filter((r) => r.status === 'running' && r.n8nExecutionId)
+        .filter((r) => r.status === 'running')
         .map(async (r) => {
-          const changed = await syncRun(r.id, r.n8nExecutionId!)
+          if (r.runType === 'batch') {
+            // Batch parents have no n8nExecutionId — derive status from children
+            try {
+              await rollupBatchRun(r.id)
+              synced++
+            } catch {
+              // best-effort
+            }
+            return
+          }
+          if (!r.n8nExecutionId) return
+          const changed = await syncRun(r.id, r.n8nExecutionId)
           if (changed) synced++
         })
     )
