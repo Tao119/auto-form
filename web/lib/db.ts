@@ -1,17 +1,17 @@
-import postgres from 'postgres'
+import { createClient } from '@supabase/supabase-js'
 
-let _sql: ReturnType<typeof postgres> | null = null
+let _client: ReturnType<typeof createClient> | null = null
 
-export function getSql(): ReturnType<typeof postgres> {
-  if (_sql) return _sql
-  const url = process.env.DATABASE_URL
-  if (!url) throw new Error('DATABASE_URL is not set')
-  _sql = postgres(url, {
-    ssl: url.includes('localhost') ? false : 'require',
-    max: 10,
-    idle_timeout: 20,
+export function getSupabase() {
+  if (_client) return _client
+  const url = process.env.SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_KEY
+  if (!url || !key) throw new Error('SUPABASE_URL or SUPABASE_SERVICE_KEY not set')
+  _client = createClient(url, key, {
+    auth: { persistSession: false },
+    global: { fetch: (url, opts) => fetch(url, { ...opts, cache: 'no-store' }) },
   })
-  return _sql
+  return _client
 }
 
-export default getSql
+export default getSupabase
