@@ -11,8 +11,8 @@ export async function GET() {
     for (const p of projects) projectMap[p.id] = { id: p.id, name: p.name }
 
     const runsLists = await Promise.all(projects.map((p) => getRunsForProject(p.id)))
-    const allRuns = runsLists
-      .flat()
+    const flatAll = runsLists.flat()
+    const allRuns = flatAll
       // Hide child runs — they belong to a batch parent and should not appear in history
       .filter((r) => !r.parentRunId)
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
@@ -22,7 +22,7 @@ export async function GET() {
       projectName: projectMap[r.projectId]?.name ?? r.projectId,
     }))
 
-    return NextResponse.json({ success: true, data })
+    return NextResponse.json({ success: true, data, _debug: { totalInDb: flatAll.length, filteredCount: allRuns.length, ts: Date.now() } })
   } catch (e) {
     return NextResponse.json({ success: false, error: String(e) }, { status: 500 })
   }
