@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Play, Loader2, CheckCircle2, XCircle, ChevronDown, Plus, FolderOpen, X, ExternalLink, Square, Sparkles, MapPin, Briefcase, Hash, Database } from 'lucide-react'
+import { Play, Loader2, CheckCircle2, XCircle, ChevronDown, Plus, FolderOpen, X, ExternalLink, Square, Sparkles, MapPin, Briefcase, Database } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import type { Preset, Project, SearchProvider } from '@/lib/types'
 import { estimateCost } from '@/lib/area-data'
@@ -25,17 +25,14 @@ function saveToHistory(area: string, industry: string) {
   } catch {}
 }
 
-// 実測データに基づく最適キーワード設定 (2026-04-19 検証済み)
-// 追加kwの限界効率が1kwの50%を下回る場合はkw数を増やさない
-// 整骨院1kw=91件/$ / 歯科2kw=48件/$ / 美容室1kw=40件/$
 const KEYWORDS_MAP: Record<string, string[]> = {
-  '美容室':      ['美容室'],
-  'ヘアサロン':  ['ヘアサロン'],
-  'エステサロン': ['エステサロン', '脱毛サロン'],
-  '美容クリニック': ['美容クリニック', '医療脱毛'],
-  '歯科医院':    ['歯科', '矯正歯科'],
-  '整骨院':      ['整骨院'],
-  '中古車販売':  ['中古車', '中古車販売'],
+  '美容室':      ['美容室', 'ヘアサロン', '美容院', '美容師', 'ヘアカット'],
+  'ヘアサロン':  ['ヘアサロン', '美容室', '美容院', 'ヘアカラー'],
+  'エステサロン': ['エステサロン', '脱毛サロン', 'フェイシャルエステ', 'ボディケア'],
+  '美容クリニック': ['美容クリニック', '医療脱毛', '美容外科', 'スキンケアクリニック'],
+  '歯科医院':    ['歯科', '歯医者', '矯正歯科', 'デンタルクリニック', '小児歯科'],
+  '整骨院':      ['整骨院', '接骨院', '整体院', 'カイロプラクティック'],
+  '中古車販売':  ['中古車', '中古車販売', '中古自動車', 'カーディーラー', 'カーショップ'],
 }
 
 type Status = 'idle' | 'queued' | 'running' | 'success' | 'error'
@@ -47,13 +44,6 @@ interface BatchProgress {
   error: number
 }
 
-const MAX_RESULTS_OPTIONS = [
-  { label: '50件', value: 50 },
-  { label: '100件', value: 100 },
-  { label: '200件', value: 200 },
-  { label: '500件', value: 500 },
-  { label: '無制限', value: 1000000 },
-]
 
 
 function generateRunId() {
@@ -64,7 +54,7 @@ const EP_STORAGE_KEY = 'execute_panel_settings'
 
 function loadPanelSettings(): {
   industry?: string
-  selectedAreas?: string[]; maxResults?: number; selectedProjectId?: string
+  selectedAreas?: string[]; selectedProjectId?: string
 } {
   try {
     const raw = localStorage.getItem(EP_STORAGE_KEY)
@@ -105,8 +95,6 @@ export default function ExecutePanel() {
   const [liveCount, setLiveCount] = useState(0)
   const [queuePosition, setQueuePosition] = useState(0)
   const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null)
-  const [maxResults, setMaxResults] = useState(50)
-
   const [projects, setProjects] = useState<Project[]>([])
   const [selectedProjectId, setSelectedProjectId] = useState<string>('')
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -138,7 +126,6 @@ export default function ExecutePanel() {
     const s = loadPanelSettings()
     if (s.industry) setIndustry(s.industry)
     if (Array.isArray(s.selectedAreas) && s.selectedAreas.length > 0) setAreaInput(s.selectedAreas[0])
-    if (s.maxResults !== undefined) setMaxResults(s.maxResults)
     // Pre-load history for suggestions
     const h = loadHistory()
     setAreaSuggestions(h.areas)
@@ -150,8 +137,8 @@ export default function ExecutePanel() {
   // Persist settings whenever they change (after initial load)
   useEffect(() => {
     if (!_settingsLoaded) return
-    savePanelSettings({ industry, selectedAreas: [areaInput], maxResults, selectedProjectId })
-  }, [_settingsLoaded, industry, areaInput, maxResults, selectedProjectId])
+    savePanelSettings({ industry, selectedAreas: [areaInput], selectedProjectId })
+  }, [_settingsLoaded, industry, areaInput, selectedProjectId])
 
   // Validate area input (debounced 800ms)
   useEffect(() => {
@@ -369,7 +356,6 @@ export default function ExecutePanel() {
             areas: effectiveAreas,
             keywords: activeKeywords,
             suffixes: suffixes.length > 0 ? suffixes : undefined,
-            maxResults,
             searchProvider,
           }),
         })
@@ -451,7 +437,6 @@ export default function ExecutePanel() {
     // area may be comma-separated — take first one
     const area = t.area.includes(',') ? t.area.split(',')[0].trim() : t.area
     setAreaInput(area)
-    if (t.maxResults) setMaxResults(t.maxResults)
     setShowPresets(false)
   }
 
@@ -465,7 +450,7 @@ export default function ExecutePanel() {
       await fetch('/api/config/presets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, searchTarget: { industry: actualIndustry, area, keywords: activeKeywords, maxResults } }),
+        body: JSON.stringify({ name, searchTarget: { industry: actualIndustry, area, keywords: activeKeywords } }),
       })
       const r = await fetch('/api/config/presets')
       const d = await r.json()
@@ -758,31 +743,16 @@ export default function ExecutePanel() {
           <div className="text-xs text-gray-700">
             概算コスト:&nbsp;
             <span className="font-semibold">
-              ${estimateCost(keywords.length, selectedAreas, false, maxResults).toFixed(2)}
+              ${estimateCost(keywords.length, selectedAreas, false, 1000000).toFixed(2)}
             </span>
           </div>
         </div>
 
       </div>{/* end space-y-3 */}
 
-      {/* MaxResults + Execute */}
+      {/* Execute */}
       <div className="space-y-2">
         <div className="flex items-center gap-3">
-          {/* Max results selector */}
-          <div className="flex items-center gap-1.5">
-            <Hash className="w-3.5 h-3.5 text-gray-400" />
-            <select
-              value={maxResults}
-              onChange={(e) => setMaxResults(Number(e.target.value))}
-              disabled={isRunning}
-              className="bg-white border border-gray-300 rounded px-2 py-1.5 text-xs text-gray-700 focus:border-blue-500 focus:outline-none disabled:opacity-50"
-            >
-              {MAX_RESULTS_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </select>
-          </div>
-
           <button
             onClick={handleExecute}
             disabled={!canExecute}

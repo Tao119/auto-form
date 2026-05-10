@@ -4,7 +4,8 @@ import { z } from 'zod'
 export const maxDuration = 300
 
 const Schema = z.object({
-  keywords:   z.array(z.string()).min(1),
+  keywords:   z.array(z.string()).default([]),
+  industry:   z.string().optional(),
   area:       z.string().min(1),
   maxResults: z.number().int().min(0).default(50),  // 0 or large number = unlimited
   suffixes:   z.array(z.string()).optional(),        // AI判定で100件超え時に追加される修飾語
@@ -166,7 +167,14 @@ function expandArea(area: string): string[] {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = Schema.parse(await req.json())
+    const raw = Schema.parse(await req.json())
+    const effectiveKeywords = raw.keywords.length > 0
+      ? raw.keywords
+      : raw.industry ? [raw.industry] : raw.keywords
+    const body = { ...raw, keywords: effectiveKeywords }
+    if (body.keywords.length === 0) {
+      return NextResponse.json({ success: false, error: 'keywords or industry is required' }, { status: 400 })
+    }
     const apiKey = process.env.SERPER_API_KEY
     if (!apiKey) {
       return NextResponse.json({ success: false, error: 'SERPER_API_KEY not configured' }, { status: 500 })
@@ -174,21 +182,14 @@ export async function POST(req: NextRequest) {
 
     const seen = new Set<string>()
 
-    const isUnlimited = body.maxResults === 0 || body.maxResults > 1000
     const subAreas = expandArea(body.area)
-    const isExpanded = subAreas.length > 1
-    // Serper returns max 10 items/page, max 10 pages (= 100 results/query)
-    // Unlimited mode: 10 pages per query. Limited: ceil(maxResults/subAreas/10) pages, capped at 10
-    const pages = isUnlimited
-      ? 10
-      : Math.min(10, Math.max(1, Math.ceil(body.maxResults / subAreas.length / 10)))
+    // Always fetch max 10 pages per query (Serper max = 100 results/query)
+    const pages = 10
 
-    // 修飾語: 都道府県展開時はデフォルト3種、それ以外はAIが100件超えと判断した場合のみ付与
-    const DEFAULT_EXPANDED_SUFFIXES = ['お問い合わせ', '公式サイト', 'contact']
+    // Always apply suffixes to maximize coverage
+    const DEFAULT_SUFFIXES = ['お問い合わせ', '公式サイト', 'contact', '予約', '申込み']
     const aiSuffixes = body.suffixes && body.suffixes.length > 0 ? body.suffixes : null
-    const SUFFIXES: string[] = isExpanded
-      ? DEFAULT_EXPANDED_SUFFIXES
-      : (aiSuffixes ?? [''])
+    const SUFFIXES: string[] = aiSuffixes ?? DEFAULT_SUFFIXES
 
     // 全クエリをリスト化して並列実行
     type QueryJob = { query: string; kw: string; subArea: string; page: number }
@@ -233,11 +234,9 @@ export async function POST(req: NextRequest) {
       for (const r of results) {
         if ('error' in r && r.error) { hasApiError = r.error; break }
         for (const item of r.items ?? []) {
-          try {
-            const host = new URL(item.link).hostname.replace(/^www\./, '')
-            if (seen.has(host)) continue
-            seen.add(host)
-          } catch { continue }
+          if (!item.link) continue
+          if (seen.has(item.link)) continue
+          seen.add(item.link)
           rawResults.push(item)
         }
       }
