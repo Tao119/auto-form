@@ -1,1 +1,797 @@
-{"name": "リスト収集AI - 企業フォーム自動探索","nodes": [{"parameters": {"rule": {"interval": [{"field": "cronExpression","expression": "0 9 * * 1-5"}]}},"id": "trigger-schedule","name": "スケジュール実行（平日9時）","type": "n8n-nodes-base.scheduleTrigger","typeVersion": 1.2,"position": [200,300]},{"parameters": {},"id": "trigger-manual","name": "手動実行","type": "n8n-nodes-base.manualTrigger","typeVersion": 1,"position": [200,180]},{"parameters": {"httpMethod": "POST","path": "list-collect","responseMode": "onReceived","options": {}},"id": "trigger-webhook","name": "Webhook受信","type": "n8n-nodes-base.webhook","typeVersion": 2,"position": [200,420],"webhookId": "list-collect"},{"parameters": {"assignments": {"assignments": [{"id": "param-industry","name": "industry","value": "={{ $json.body?.industry || '美容室' }}","type": "string"},{"id": "param-area","name": "area","value": "={{ $json.body?.area || '東京都' }}","type": "string"},{"id": "param-keywords","name": "keywords","value": "={{ $json.body?.keywords ? JSON.stringify($json.body.keywords) : '[\"美容室\",\"ヘアサロン\",\"美容院\"]' }}","type": "string"},{"id": "param-maxResults","name": "maxResults","value": "={{ $json.body?.maxResults ?? 50 }}","type": "string"},{"id": "param-spreadsheetId","name": "spreadsheetId","value": "={{ $env.GOOGLE_SHEETS_ID }}","type": "string"},{"id": "param-projectId","name": "projectId","value": "={{ $json.body?.projectId || '' }}","type": "string"},{"id": "param-runId","name": "runId","value": "={{ $json.body?.runId || '' }}","type": "string"},{"id": "param-searchProvider","name": "searchProvider","value": "={{ $json.body?.searchProvider || 'serper' }}","type": "string"}]}},"id": "set-params","name": "L-01: 検索パラメータ設定","type": "n8n-nodes-base.set","typeVersion": 3.4,"position": [420,240]},{"parameters": {"method": "POST","url": "http://host.docker.internal:3000/api/search/serper","sendHeaders": true,"headerParameters": {"parameters": [{"name": "Content-Type","value": "application/json"}]},"sendBody": true,"specifyBody": "json","jsonBody": "={{ JSON.stringify({ keywords: Array.isArray($json.keywords) ? $json.keywords : JSON.parse($json.keywords || JSON.stringify([$json.industry])), area: $json.area, maxResults: parseInt($json.maxResults) ?? 50 }) }}","options": {}},"id": "google-search","name": "L-02: Google検索（企業リスト取得）","type": "n8n-nodes-base.httpRequest","typeVersion": 4.2,"position": [640,240]},{"parameters": {"jsCode": "// Expand items from serper proxy response\nconst items = $input.item.json.items || [];\nreturn items.map(item => ({ json: item }));"},"id": "split-search-results","name": "検索結果を分割","type": "n8n-nodes-base.code","typeVersion": 2,"position": [860,240]},{"parameters": {"jsCode": "// CSEレスポンスを企業データに整形\nconst p = $('L-01: 検索パラメータ設定').item.json;\nconst items = $input.all();\n\nconst SKIP_DOMAINS = [\n  'jalan.net','tabelog.com','hotpepper.jp','ekiten.jp','townpage.ntt.co.jp',\n  'yelp.com','google.com','facebook.com','instagram.com','twitter.com','x.com',\n  'youtube.com','wikipedia.org','recruit.co.jp','indeed.com','linkedin.com',\n  'rakuten.co.jp','amazon.co.jp','wantedly.com','yahoo.co.jp',\n  'beauty.hotpepper.jp','minimo.io','navitime.co.jp','mapion.co.jp',\n  'retty.me','gurunavi.com','gnavi.co.jp','yelp.co.jp', 'karadarefre.jp', 'judo-ch.jp', 'body-care.expert', 'epark.jp', 'homemate-research.com', 'navitime.jp', 'iphone.jorudan.co.jp',\n  'hairbook.jp', 'riyou.jp', 'bestsalonreport.jp', 'beauty-park.jp', 'minimodel.jp',\n  'cuts.jp', 'hairsalon-map.com', '9483.jp', 'styledesigner.net', 'palanjp.com',\n  'kotomise.jp', 'repicolle.jp', 'jhdac.org', 'kiyose.or.jp', 'katusika-e-toko.com',\n  'hair.socie.jp', 'seahorsejp.com', 'web-zest.co.jp', 'people-brand.com',\n  'higasiyamatotida.wixsite.com',\n  'beautysalon.jp-book.store',\n  'zehitomo.com',\n  'its-mo.com',\n  'baseconnect.in',\n  'aderans.co.jp',\n  'beauty.mirai-agent.jp',\n  'kinujo.jp',\n  'am-shuuemura.jp',\n  'el.e-shops.jp',\n  'beautysalon.potatoo.jp',\n  'hair-land.jp',\n  'pathee.com',\n  'iryou.teikyouseido.mhlw.go.jp',\n  'modshair.co.jp',\n  'salon.tbmg.jp',\n];\n\nfunction extractHost(url) {\n  const m = url.match(/^https?:\\/\\/([^/?#]+)/);\n  return m ? m[1].replace(/^www\\./, '') : '';\n}\n\nconst SALON_KEYWORDS = ['美容室', 'ヘアサロン', '美容院', 'サロン', 'hair', 'Hair', 'HAIR'];\n\nfunction cleanCompanyName(title) {\n  if (!title) return title;\n  const segments = title.split(/[|–—｜]|-(?=[^-])/)\n    .map(s => s.trim())\n    .filter(s => s.length > 0);\n  if (segments.length <= 1) return title.trim();\n\n  // 最長セグメントが5文字以下なら元のtitleをそのまま返す\n  const maxLen = Math.max(...segments.map(s => s.length));\n  if (maxLen <= 5) return title.trim();\n\n  // 美容室キーワードを含むセグメントを優先\n  const salonSegment = segments.find(s =>\n    SALON_KEYWORDS.some(kw => s.includes(kw))\n  );\n  if (salonSegment) return salonSegment;\n\n  // なければ最も長いセグメントを返す\n  return segments.reduce((a, b) => a.length >= b.length ? a : b);\n}\n\nreturn items.map(({ json: item }) => {\n  const link = item.link || '';\n  let skipItem = !link;\n  if (link) {\n    const host = extractHost(link);\n    skipItem = !host || SKIP_DOMAINS.some(d => host === d || host.endsWith('.' + d));\n  }\n\n  return { json: {\n    companyName: cleanCompanyName(item.title || ''),\n    companyUrl:  link,\n    phone:       '',\n    address:     '',\n    industry:    p.industry,\n    area:        p.area,\n    spreadsheetId: p.spreadsheetId || '',\n    projectId:   p.projectId || '',\n    runId:       p.runId || '',\n    keyword:     item.keyword || '',\n    skipItem,\n  }};\n});\n"},"id": "map-company-data","name": "企業データを整形","type": "n8n-nodes-base.code","typeVersion": 2,"position": [1080,240]},{"parameters": {"jsCode": "\n// L-05: 重複判定 - 全アイテム処理\nconst items = $input.all();\nreturn items.map(({ json: c }) => ({\n  json: { ...c, isDuplicate: false, normalizedHpUrl: c.companyUrl || '', existingFormUrlsArray: [] }\n}));\n"},"id": "duplicate-check","name": "L-05: 重複判定","type": "n8n-nodes-base.code","typeVersion": 2,"position": [1300,300]},{"parameters": {"conditions": {"options": {"caseSensitive": true,"leftValue": "","typeValidation": "strict"},"conditions": [{"id": "not-duplicate","leftValue": "={{ $json.isDuplicate }}","rightValue": false,"operator": {"type": "boolean","operation": "equals"}}],"combinator": "and"},"options": {}},"id": "filter-duplicates","name": "重複除外フィルター","type": "n8n-nodes-base.if","typeVersion": 2.2,"position": [1520,300]},{"parameters": {"assignments": {"assignments": [{"id": "final-name","name": "会社名","value": "={{ $json.companyName }}","type": "string"},{"id": "final-url","name": "HP URL","value": "={{ $json.companyUrl }}","type": "string"},{"id": "final-form","name": "フォームURL","value": "={{ $json.formUrl }}","type": "string"},{"id": "final-phone","name": "電話番号","value": "={{ $json.phone || '' }}","type": "string"},{"id": "final-email","name": "メールアドレス","value": "={{ $json.email || '' }}","type": "string"},{"id": "final-industry","name": "業種","value": "={{ $('L-01: 検索パラメータ設定').item.json.industry }}","type": "string"},{"id": "final-area","name": "エリア","value": "={{ $('L-01: 検索パラメータ設定').item.json.area }}","type": "string"},{"id": "final-type","name": "フォーム種別","value": "={{ $json.message?.type || 'inquiry' }}","type": "string"},{"id": "final-date","name": "収集日時","value": "={{ new Date().toLocaleString('ja-JP', {timeZone:'Asia/Tokyo'}) }}","type": "string"},{"id": "final-status","name": "ステータス","value": "未送信","type": "string"},{"id": "final-projectId","name": "プロジェクトID","value": "={{ $('L-01: 検索パラメータ設定').item.json.projectId }}","type": "string"},{"id": "final-runId","name": "実行ID","value": "={{ $('L-01: 検索パラメータ設定').item.json.runId }}","type": "string"}]}},"id": "format-final-data","name": "最終データ整形","type": "n8n-nodes-base.set","typeVersion": 3.4,"position": [2820,180]},{"id": "aggregator-filter","name": "アグリゲーター除外","type": "n8n-nodes-base.if","typeVersion": 2,"position": [1300,240],"parameters": {"conditions": {"options": {"caseSensitive": false,"leftValue": "","typeValidation": "strict"},"conditions": [{"id": "skip-check","leftValue": "={{ $json.skipItem }}","rightValue": true,"operator": {"type": "boolean","operation": "notEquals"}},{"id": "url-check","leftValue": "={{ $json.companyUrl }}","rightValue": "","operator": {"type": "string","operation": "notEquals"}}],"combinator": "and"}}},{"id": "scrape-http","name": "L-03: スクレイプAPI","type": "n8n-nodes-base.httpRequest","typeVersion": 4.2,"position": [1740,240],"continueOnFail": true,"parameters": {"method": "POST","url": "http://host.docker.internal:3000/api/scrape-forms-bulk","sendHeaders": true,"headerParameters": {"parameters": [{"name": "Content-Type","value": "application/json"}]},"sendBody": true,"specifyBody": "json","options": {"timeout": 600000},"jsonBody": "={{ ({ items: $json.urlItems, timeoutMs: 8000, concurrency: 20, fetchFormPage: true }) }}"}},{"id": "final-filter","name": "フォームあり？","type": "n8n-nodes-base.if","typeVersion": 2,"position": [2180,240],"parameters": {"conditions": {"options": {"caseSensitive": false,"leftValue": "","typeValidation": "strict"},"conditions": [{"id": "has-form","leftValue": "={{ $json.formUrl }}","rightValue": "","operator": {"type": "string","operation": "notEquals"}},{"id": "not-empty","leftValue": "={{ $json._empty }}","rightValue": true,"operator": {"type": "boolean","operation": "notEquals"}}],"combinator": "and"}}},{"id": "collect-urls","name": "URL収集","type": "n8n-nodes-base.code","typeVersion": 2,"position": [1640,240],"parameters": {"mode": "runOnceForAllItems","jsCode": "\n// 全企業URLを1つのリストに集約してscrape APIに渡す\nconst items = $input.all();\nconst urlItems = items.map(({ json: c }) => ({\n  url: c.companyUrl || '',\n  baseUrl: c.companyUrl || '',\n})).filter(x => x.url);\n\nconst requestBody = JSON.stringify({\n  items: urlItems,\n  timeoutMs: 8000,\n  concurrency: 5,\n  fetchFormPage: true,\n});\n\nreturn [{ json: { urlItems, companies: items.map(i => i.json), requestBody } }];\n"}},{"id": "expand-v2","name": "結果展開・整形","type": "n8n-nodes-base.code","typeVersion": 2,"position": [1960,240],"parameters": {"mode": "runOnceForAllItems","jsCode": "// スクレイプAPI結果を展開\nconst allInput = $input.all();\nif (!allInput.length) return [{ json: { _empty: true } }];\n\nconst item = allInput[0].json;\nconst results = item.results || [];\n\nif (!results.length) return [{ json: { _empty: true } }];\n\n// URL収集ノードから元の企業情報（会社名等）を取得\nlet companies = [];\ntry {\n  companies = $('URL収集').item.json.companies || [];\n} catch(e) {}\n\n// URLをキーにして会社名を引く\nconst companyMap = {};\nfor (const c of companies) {\n  if (c.companyUrl) companyMap[c.companyUrl] = c;\n}\n\nreturn results.map(r => {\n  const origUrl = r.url || r.baseUrl || '';\n  const orig = companyMap[origUrl] || {};\n  return { json: {\n    companyUrl: origUrl,\n    companyName: orig.companyName || r.companyName || '',\n    keyword: orig.keyword || '',\n    formUrl: r.formUrl || null,\n    email: r.email || null,\n    phone: r.phone || null,\n    address: r.address || null,\n    hasContactLink: r.hasContactLink || false,\n    contactLinks: r.contactLinks || [],\n    formPageTitle: r.formPageTitle || '',\n    formTypeHint: r.formTypeHint || 'unknown',\n    error: r.error || null,\n  } };\n});\n"}},{"parameters": {"method": "POST","url": "={{ \"http://host.docker.internal:3000/api/projects/runs/\" + $json.runId + \"/complete\" }}","sendHeaders": true,"headerParameters": {"parameters": [{"name": "Content-Type","value": "application/json"}]},"sendBody": true,"specifyBody": "json","jsonBody": "={{ JSON.stringify({ status: $json.status, companies: $json.companies }) }}","options": {"timeout": 600000}},"id": "callback-complete","name": "コールバック（完了通知）","type": "n8n-nodes-base.httpRequest","typeVersion": 4.2,"position": [3180,180]},{"parameters": {"mode": "runOnceForAllItems","jsCode": "\nconst items = $input.all();\nconst companies = items.map(i => ({\n  name: i.json[\"会社名\"] || \"\",\n  hpUrl: i.json[\"HP URL\"] || \"\",\n  formUrl: i.json[\"フォームURL\"] || \"\",\n  phone: i.json[\"電話番号\"] || \"\",\n  email: i.json[\"メールアドレス\"] || \"\",\n  industry: i.json[\"業種\"] || \"\",\n  area: i.json[\"エリア\"] || \"\",\n  formType: i.json[\"フォーム種別\"] || \"\",\n  status: i.json[\"ステータス\"] || \"未送信\",\n  projectId: i.json[\"プロジェクトID\"] || \"\",\n  runId: i.json[\"実行ID\"] || \"\",\n  collectedAt: i.json[\"収集日時\"] || \"\"\n}));\nconst runId = items[0]?.json[\"実行ID\"] || \"\";\nreturn [{ json: { status: \"success\", companies, runId } }];\n"},"id": "aggregate-results","name": "結果集約","type": "n8n-nodes-base.code","typeVersion": 2,"position": [2940,180]},{"id": "merge-all-results","name": "全結果マージ","type": "n8n-nodes-base.merge","typeVersion": 3,"position": [2820,300],"parameters": {"mode": "append"}},{"id": "search-provider-branch","name": "検索プロバイダー分岐","type": "n8n-nodes-base.if","typeVersion": 2,"position": [530,240],"parameters": {"conditions": {"options": {"caseSensitive": false,"leftValue": "","typeValidation": "strict"},"conditions": [{"id": "is-places","leftValue": "={{ $json.searchProvider }}","rightValue": "places","operator": {"type": "string","operation": "equals"}}],"combinator": "and"}}},{"id": "places-search","name": "L-02b: Places検索（企業リスト取得）","type": "n8n-nodes-base.httpRequest","typeVersion": 4.2,"position": [740,160],"continueOnFail": false,"parameters": {"method": "POST","url": "http://host.docker.internal:3000/api/search/places","sendHeaders": true,"headerParameters": {"parameters": [{"name": "Content-Type","value": "application/json"}]},"sendBody": true,"specifyBody": "json","jsonBody": "={{ JSON.stringify({ keywords: Array.isArray($json.keywords) ? $json.keywords : JSON.parse($json.keywords || JSON.stringify([$json.industry])), area: $json.area, maxResults: parseInt($json.maxResults) ?? 0 }) }}","options": {"timeout": 600000}}}],"connections": {"スケジュール実行（平日9時）": {"main": [[{"node": "L-01: 検索パラメータ設定","type": "main","index": 0}]]},"手動実行": {"main": [[{"node": "L-01: 検索パラメータ設定","type": "main","index": 0}]]},"L-01: 検索パラメータ設定": {"main": [[{"node": "検索プロバイダー分岐","type": "main","index": 0}]]},"L-02: Google検索（企業リスト取得）": {"main": [[{"node": "検索結果を分割","type": "main","index": 0}]]},"検索結果を分割": {"main": [[{"node": "企業データを整形","type": "main","index": 0}]]},"企業データを整形": {"main": [[{"node": "アグリゲーター除外","type": "main","index": 0}]]},"L-05: 重複判定": {"main": [[{"node": "重複除外フィルター","type": "main","index": 0}]]},"重複除外フィルター": {"main": [[{"node": "URL収集","type": "main","index": 0}],[]]},"アグリゲーター除外": {"main": [[{"node": "L-05: 重複判定","type": "main","index": 0}],[]]},"Webhook受信": {"main": [[{"node": "L-01: 検索パラメータ設定","type": "main","index": 0}]]},"L-03: スクレイプAPI": {"main": [[{"node": "結果展開・整形","type": "main","index": 0}]]},"結果展開・整形": {"main": [[{"node": "フォームあり？","type": "main","index": 0}]]},"フォームあり？": {"main": [[{"node": "全結果マージ","type": "main","index": 0}],[{"node": "全結果マージ","type": "main","index": 1}]]},"URL収集": {"main": [[{"node": "L-03: スクレイプAPI","type": "main","index": 0}]]},"最終データ整形": {"main": [[{"node": "結果集約","type": "main","index": 0}]]},"結果集約": {"main": [[{"node": "コールバック（完了通知）","type": "main","index": 0}]]},"全結果マージ": {"main": [[{"node": "最終データ整形","type": "main","index": 0}]]},"検索プロバイダー分岐": {"main": [[{"node": "L-02b: Places検索（企業リスト取得）","type": "main","index": 0}],[{"node": "L-02: Google検索（企業リスト取得）","type": "main","index": 0}]]},"L-02b: Places検索（企業リスト取得）": {"main": [[{"node": "検索結果を分割","type": "main","index": 0}]]}},"settings": {"executionOrder": "v1","saveManualExecutions": true,"callerPolicy": "workflowsFromSameOwner","timezone": "Asia/Tokyo"}}
+{
+  "name": "リスト収集AI - 企業フォーム自動探索",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "trigger-schedule",
+      "name": "スケジュール実行（平日9時）",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        300
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "trigger-manual",
+      "name": "手動実行",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        200,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "list-collect",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "trigger-webhook",
+      "name": "Webhook受信",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        420
+      ],
+      "webhookId": "list-collect"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "param-industry",
+              "name": "industry",
+              "value": "={{ $json.body?.industry || '美容室' }}",
+              "type": "string"
+            },
+            {
+              "id": "param-area",
+              "name": "area",
+              "value": "={{ $json.body?.area || '東京都' }}",
+              "type": "string"
+            },
+            {
+              "id": "param-keywords",
+              "name": "keywords",
+              "value": "={{ $json.body?.keywords ? JSON.stringify($json.body.keywords) : '[\"美容室\",\"ヘアサロン\",\"美容院\"]' }}",
+              "type": "string"
+            },
+            {
+              "id": "param-maxResults",
+              "name": "maxResults",
+              "value": "={{ $json.body?.maxResults ?? 50 }}",
+              "type": "string"
+            },
+            {
+              "id": "param-spreadsheetId",
+              "name": "spreadsheetId",
+              "value": "={{ $env.GOOGLE_SHEETS_ID }}",
+              "type": "string"
+            },
+            {
+              "id": "param-projectId",
+              "name": "projectId",
+              "value": "={{ $json.body?.projectId || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "param-runId",
+              "name": "runId",
+              "value": "={{ $json.body?.runId || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "param-searchProvider",
+              "name": "searchProvider",
+              "value": "={{ $json.body?.searchProvider || 'serper' }}",
+              "type": "string"
+            },
+            {
+              "id": "param-suffixes",
+              "name": "suffixes",
+              "value": "={{ $json.body?.suffixes ? JSON.stringify($json.body.suffixes) : '[\"お問い合わせ\",\"公式サイト\",\"contact\",\"予約\",\"申込み\"]' }}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "set-params",
+      "name": "L-01: 検索パラメータ設定",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        420,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://web-liard-iota-37.vercel.app/api/search/serper",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ keywords: Array.isArray($json.keywords) ? $json.keywords : JSON.parse($json.keywords || JSON.stringify([$json.industry])), area: $json.area, maxResults: parseInt($json.maxResults) ?? 50, suffixes: Array.isArray($json.suffixes) ? $json.suffixes : JSON.parse($json.suffixes || '[]') }) }}",
+        "options": {}
+      },
+      "id": "google-search",
+      "name": "L-02: Google検索（企業リスト取得）",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        640,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Expand items from serper proxy response\nconst items = $input.item.json.items || [];\nreturn items.map(item => ({ json: item }));"
+      },
+      "id": "split-search-results",
+      "name": "検索結果を分割",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        860,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// CSEレスポンスを企業データに整形\nconst p = $('L-01: 検索パラメータ設定').item.json;\nconst items = $input.all();\n\nconst SKIP_DOMAINS = [\n  'jalan.net','tabelog.com','hotpepper.jp','ekiten.jp','townpage.ntt.co.jp',\n  'yelp.com','google.com','facebook.com','instagram.com','twitter.com','x.com',\n  'youtube.com','wikipedia.org','recruit.co.jp','indeed.com','linkedin.com',\n  'rakuten.co.jp','amazon.co.jp','wantedly.com','yahoo.co.jp',\n  'beauty.hotpepper.jp','minimo.io','navitime.co.jp','mapion.co.jp',\n  'retty.me','gurunavi.com','gnavi.co.jp','yelp.co.jp', 'karadarefre.jp', 'judo-ch.jp', 'body-care.expert', 'epark.jp', 'homemate-research.com', 'navitime.jp', 'iphone.jorudan.co.jp',\n  'hairbook.jp', 'riyou.jp', 'bestsalonreport.jp', 'beauty-park.jp', 'minimodel.jp',\n  'cuts.jp', 'hairsalon-map.com', '9483.jp', 'styledesigner.net', 'palanjp.com',\n  'kotomise.jp', 'repicolle.jp', 'jhdac.org', 'kiyose.or.jp', 'katusika-e-toko.com',\n  'hair.socie.jp', 'seahorsejp.com', 'web-zest.co.jp', 'people-brand.com',\n  'higasiyamatotida.wixsite.com',\n  'beautysalon.jp-book.store',\n  'zehitomo.com',\n  'its-mo.com',\n  'baseconnect.in',\n  'aderans.co.jp',\n  'beauty.mirai-agent.jp',\n  'kinujo.jp',\n  'am-shuuemura.jp',\n  'el.e-shops.jp',\n  'beautysalon.potatoo.jp',\n  'hair-land.jp',\n  'pathee.com',\n  'iryou.teikyouseido.mhlw.go.jp',\n  'modshair.co.jp',\n  'salon.tbmg.jp',\n];\n\nfunction extractHost(url) {\n  const m = url.match(/^https?:\\/\\/([^/?#]+)/);\n  return m ? m[1].replace(/^www\\./, '') : '';\n}\n\nconst SALON_KEYWORDS = ['美容室', 'ヘアサロン', '美容院', 'サロン', 'hair', 'Hair', 'HAIR'];\n\nfunction cleanCompanyName(title) {\n  if (!title) return title;\n  const segments = title.split(/[|–—｜]|-(?=[^-])/)\n    .map(s => s.trim())\n    .filter(s => s.length > 0);\n  if (segments.length <= 1) return title.trim();\n\n  // 最長セグメントが5文字以下なら元のtitleをそのまま返す\n  const maxLen = Math.max(...segments.map(s => s.length));\n  if (maxLen <= 5) return title.trim();\n\n  // 美容室キーワードを含むセグメントを優先\n  const salonSegment = segments.find(s =>\n    SALON_KEYWORDS.some(kw => s.includes(kw))\n  );\n  if (salonSegment) return salonSegment;\n\n  // なければ最も長いセグメントを返す\n  return segments.reduce((a, b) => a.length >= b.length ? a : b);\n}\n\nreturn items.map(({ json: item }) => {\n  const link = item.link || '';\n  let skipItem = !link;\n  if (link) {\n    const host = extractHost(link);\n    skipItem = !host || SKIP_DOMAINS.some(d => host === d || host.endsWith('.' + d));\n  }\n\n  return { json: {\n    companyName: cleanCompanyName(item.title || ''),\n    companyUrl:  link,\n    phone:       '',\n    address:     '',\n    industry:    p.industry,\n    area:        p.area,\n    spreadsheetId: p.spreadsheetId || '',\n    projectId:   p.projectId || '',\n    runId:       p.runId || '',\n    keyword:     item.keyword || '',\n    skipItem,\n  }};\n});\n"
+      },
+      "id": "map-company-data",
+      "name": "企業データを整形",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// L-05: 重複判定 - 全アイテム処理\nconst items = $input.all();\nreturn items.map(({ json: c }) => ({\n  json: { ...c, isDuplicate: false, normalizedHpUrl: c.companyUrl || '', existingFormUrlsArray: [] }\n}));\n"
+      },
+      "id": "duplicate-check",
+      "name": "L-05: 重複判定",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "not-duplicate",
+              "leftValue": "={{ $json.isDuplicate }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "filter-duplicates",
+      "name": "重複除外フィルター",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1520,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "final-name",
+              "name": "会社名",
+              "value": "={{ $json.companyName }}",
+              "type": "string"
+            },
+            {
+              "id": "final-url",
+              "name": "HP URL",
+              "value": "={{ $json.companyUrl }}",
+              "type": "string"
+            },
+            {
+              "id": "final-form",
+              "name": "フォームURL",
+              "value": "={{ $json.formUrl }}",
+              "type": "string"
+            },
+            {
+              "id": "final-phone",
+              "name": "電話番号",
+              "value": "={{ $json.phone || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "final-email",
+              "name": "メールアドレス",
+              "value": "={{ $json.email || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "final-industry",
+              "name": "業種",
+              "value": "={{ $('L-01: 検索パラメータ設定').item.json.industry }}",
+              "type": "string"
+            },
+            {
+              "id": "final-area",
+              "name": "エリア",
+              "value": "={{ $('L-01: 検索パラメータ設定').item.json.area }}",
+              "type": "string"
+            },
+            {
+              "id": "final-type",
+              "name": "フォーム種別",
+              "value": "={{ $json.message?.type || 'inquiry' }}",
+              "type": "string"
+            },
+            {
+              "id": "final-date",
+              "name": "収集日時",
+              "value": "={{ new Date().toLocaleString('ja-JP', {timeZone:'Asia/Tokyo'}) }}",
+              "type": "string"
+            },
+            {
+              "id": "final-status",
+              "name": "ステータス",
+              "value": "未送信",
+              "type": "string"
+            },
+            {
+              "id": "final-projectId",
+              "name": "プロジェクトID",
+              "value": "={{ $('L-01: 検索パラメータ設定').item.json.projectId }}",
+              "type": "string"
+            },
+            {
+              "id": "final-runId",
+              "name": "実行ID",
+              "value": "={{ $('L-01: 検索パラメータ設定').item.json.runId }}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "format-final-data",
+      "name": "最終データ整形",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2820,
+        180
+      ]
+    },
+    {
+      "id": "aggregator-filter",
+      "name": "アグリゲーター除外",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        240
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "skip-check",
+              "leftValue": "={{ $json.skipItem }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "notEquals"
+              }
+            },
+            {
+              "id": "url-check",
+              "leftValue": "={{ $json.companyUrl }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "scrape-http",
+      "name": "L-03: スクレイプAPI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1740,
+        240
+      ],
+      "continueOnFail": true,
+      "parameters": {
+        "method": "POST",
+        "url": "https://web-liard-iota-37.vercel.app/api/scrape-forms-bulk",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "options": {
+          "timeout": 600000
+        },
+        "jsonBody": "={{ ({ items: $json.urlItems, timeoutMs: 8000, concurrency: 20, fetchFormPage: true }) }}"
+      }
+    },
+    {
+      "id": "final-filter",
+      "name": "フォームあり？",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2180,
+        240
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-form",
+              "leftValue": "={{ $json.formUrl }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            },
+            {
+              "id": "not-empty",
+              "leftValue": "={{ $json._empty }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "collect-urls",
+      "name": "URL収集",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1640,
+        240
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\n// 全企業URLを1つのリストに集約してscrape APIに渡す\nconst items = $input.all();\nconst urlItems = items.map(({ json: c }) => ({\n  url: c.companyUrl || '',\n  baseUrl: c.companyUrl || '',\n})).filter(x => x.url);\n\nconst requestBody = JSON.stringify({\n  items: urlItems,\n  timeoutMs: 8000,\n  concurrency: 5,\n  fetchFormPage: true,\n});\n\nreturn [{ json: { urlItems, companies: items.map(i => i.json), requestBody } }];\n"
+      }
+    },
+    {
+      "id": "expand-v2",
+      "name": "結果展開・整形",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1960,
+        240
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// スクレイプAPI結果を展開\nconst allInput = $input.all();\nif (!allInput.length) return [{ json: { _empty: true } }];\n\nconst item = allInput[0].json;\nconst results = item.results || [];\n\nif (!results.length) return [{ json: { _empty: true } }];\n\n// URL収集ノードから元の企業情報（会社名等）を取得\nlet companies = [];\ntry {\n  companies = $('URL収集').item.json.companies || [];\n} catch(e) {}\n\n// URLをキーにして会社名を引く\nconst companyMap = {};\nfor (const c of companies) {\n  if (c.companyUrl) companyMap[c.companyUrl] = c;\n}\n\nreturn results.map(r => {\n  const origUrl = r.url || r.baseUrl || '';\n  const orig = companyMap[origUrl] || {};\n  return { json: {\n    companyUrl: origUrl,\n    companyName: orig.companyName || r.companyName || '',\n    keyword: orig.keyword || '',\n    formUrl: r.formUrl || null,\n    email: r.email || null,\n    phone: r.phone || null,\n    address: r.address || null,\n    hasContactLink: r.hasContactLink || false,\n    contactLinks: r.contactLinks || [],\n    formPageTitle: r.formPageTitle || '',\n    formTypeHint: r.formTypeHint || 'unknown',\n    error: r.error || null,\n  } };\n});\n"
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ \"https://web-liard-iota-37.vercel.app/api/projects/runs/\" + $json.runId + \"/complete\" }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: $json.status, companies: $json.companies }) }}",
+        "options": {
+          "timeout": 600000
+        }
+      },
+      "id": "callback-complete",
+      "name": "コールバック（完了通知）",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3180,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\nconst items = $input.all();\nconst companies = items.map(i => ({\n  name: i.json[\"会社名\"] || \"\",\n  hpUrl: i.json[\"HP URL\"] || \"\",\n  formUrl: i.json[\"フォームURL\"] || \"\",\n  phone: i.json[\"電話番号\"] || \"\",\n  email: i.json[\"メールアドレス\"] || \"\",\n  industry: i.json[\"業種\"] || \"\",\n  area: i.json[\"エリア\"] || \"\",\n  formType: i.json[\"フォーム種別\"] || \"\",\n  status: i.json[\"ステータス\"] || \"未送信\",\n  projectId: i.json[\"プロジェクトID\"] || \"\",\n  runId: i.json[\"実行ID\"] || \"\",\n  collectedAt: i.json[\"収集日時\"] || \"\"\n}));\nconst runId = items[0]?.json[\"実行ID\"] || \"\";\nreturn [{ json: { status: \"success\", companies, runId } }];\n"
+      },
+      "id": "aggregate-results",
+      "name": "結果集約",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2940,
+        180
+      ]
+    },
+    {
+      "id": "merge-all-results",
+      "name": "全結果マージ",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        2820,
+        300
+      ],
+      "parameters": {
+        "mode": "append"
+      }
+    },
+    {
+      "id": "search-provider-branch",
+      "name": "検索プロバイダー分岐",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        530,
+        240
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "is-places",
+              "leftValue": "={{ $json.searchProvider }}",
+              "rightValue": "places",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "places-search",
+      "name": "L-02b: Places検索（企業リスト取得）",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        740,
+        160
+      ],
+      "continueOnFail": false,
+      "parameters": {
+        "method": "POST",
+        "url": "https://web-liard-iota-37.vercel.app/api/search/places",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ keywords: Array.isArray($json.keywords) ? $json.keywords : JSON.parse($json.keywords || JSON.stringify([$json.industry])), area: $json.area, maxResults: parseInt($json.maxResults) ?? 0 }) }}",
+        "options": {
+          "timeout": 600000
+        }
+      }
+    }
+  ],
+  "connections": {
+    "スケジュール実行（平日9時）": {
+      "main": [
+        [
+          {
+            "node": "L-01: 検索パラメータ設定",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "手動実行": {
+      "main": [
+        [
+          {
+            "node": "L-01: 検索パラメータ設定",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "L-01: 検索パラメータ設定": {
+      "main": [
+        [
+          {
+            "node": "検索プロバイダー分岐",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "L-02: Google検索（企業リスト取得）": {
+      "main": [
+        [
+          {
+            "node": "検索結果を分割",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "検索結果を分割": {
+      "main": [
+        [
+          {
+            "node": "企業データを整形",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "企業データを整形": {
+      "main": [
+        [
+          {
+            "node": "アグリゲーター除外",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "L-05: 重複判定": {
+      "main": [
+        [
+          {
+            "node": "重複除外フィルター",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "重複除外フィルター": {
+      "main": [
+        [
+          {
+            "node": "URL収集",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "アグリゲーター除外": {
+      "main": [
+        [
+          {
+            "node": "L-05: 重複判定",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Webhook受信": {
+      "main": [
+        [
+          {
+            "node": "L-01: 検索パラメータ設定",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "L-03: スクレイプAPI": {
+      "main": [
+        [
+          {
+            "node": "結果展開・整形",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "結果展開・整形": {
+      "main": [
+        [
+          {
+            "node": "フォームあり？",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "フォームあり？": {
+      "main": [
+        [
+          {
+            "node": "全結果マージ",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "全結果マージ",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "URL収集": {
+      "main": [
+        [
+          {
+            "node": "L-03: スクレイプAPI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "最終データ整形": {
+      "main": [
+        [
+          {
+            "node": "結果集約",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "結果集約": {
+      "main": [
+        [
+          {
+            "node": "コールバック（完了通知）",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "全結果マージ": {
+      "main": [
+        [
+          {
+            "node": "最終データ整形",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "検索プロバイダー分岐": {
+      "main": [
+        [
+          {
+            "node": "L-02b: Places検索（企業リスト取得）",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "L-02: Google検索（企業リスト取得）",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "L-02b: Places検索（企業リスト取得）": {
+      "main": [
+        [
+          {
+            "node": "検索結果を分割",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "Asia/Tokyo"
+  }
+}
