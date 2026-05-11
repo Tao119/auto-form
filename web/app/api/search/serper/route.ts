@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
-import getSupabase from '@/lib/db'
+import { runSerperSearch } from '@/lib/serper'
 
-export const maxDuration = 60
+export const maxDuration = 300
 
 const Schema = z.object({
   keywords:   z.array(z.string()).default([]),
@@ -23,25 +23,23 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'keywords or industry is required' }, { status: 400 })
     }
 
-    const jobId = `sj-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const supabase = getSupabase() as any
-    const { error: dbErr } = await supabase.from('serper_jobs').insert({
-      id: jobId,
-      status: 'queued',
-      params: body,
+    const apiKey = process.env.SERPER_API_KEY
+    if (!apiKey) {
+      return NextResponse.json({ success: false, error: 'SERPER_API_KEY not configured' }, { status: 500 })
+    }
+
+    const { items, error: apiErr } = await runSerperSearch({
+      keywords: body.keywords,
+      area: body.area,
+      suffixes: body.suffixes,
+      apiKey,
     })
-    if (dbErr) throw new Error(dbErr.message)
 
-    // Fire-and-forget: kick off the processor (don't await)
-    const base = process.env.INTERNAL_BASE_URL || 'http://localhost:3000'
-    fetch(`${base}/api/search/serper/process`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobId }),
-    }).catch(() => {/* best-effort */})
+    if (apiErr) {
+      return NextResponse.json({ success: false, error: `Serper API error: ${apiErr.status} ${apiErr.text}` }, { status: 502 })
+    }
 
-    return NextResponse.json({ success: true, jobId, status: 'queued' })
+    return NextResponse.json({ success: true, items, count: items.length })
   } catch (e) {
     return NextResponse.json({ success: false, error: String(e) }, { status: 400 })
   }
