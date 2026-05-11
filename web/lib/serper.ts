@@ -162,7 +162,8 @@ export async function runSerperSearch(params: {
   apiKey: string
 }): Promise<{ items: SerperResultItem[]; error?: { status: number; text: string } }> {
   const { keywords, area, suffixes, apiKey } = params
-  const subAreas = expandArea(area)
+  // エリア展開はUI/n8nのバッチ分割に委譲。ここでは単一エリアとして扱う
+  const subAreas = [area]
   const pages = 10
   const SUFFIXES = (suffixes && suffixes.length > 0) ? suffixes : DEFAULT_SUFFIXES
 
