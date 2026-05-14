@@ -155,6 +155,24 @@ export type SerperResultItem = {
 
 export const DEFAULT_SUFFIXES = ['お問い合わせ', '公式サイト', 'contact', '予約', '申込み']
 
+// ポータル・SNS・アグリゲータドメイン — serper結果から事前除外
+const SKIP_DOMAINS = new Set([
+  'jalan.net','tabelog.com','hotpepper.jp','ekiten.jp','townpage.ntt.co.jp',
+  'navitime.co.jp','navitime.jp','mapion.co.jp','its-mo.com',
+  'yelp.com','yelp.co.jp','retty.me','gurunavi.com','gnavi.co.jp',
+  'google.com','google.co.jp','facebook.com','instagram.com','twitter.com','x.com',
+  'youtube.com','wikipedia.org','linkedin.com','tiktok.com',
+  'recruit.co.jp','indeed.com','wantedly.com','yahoo.co.jp',
+  'rakuten.co.jp','amazon.co.jp',
+  'beauty.hotpepper.jp','minimo.io','hairbook.jp','riyou.jp',
+  'epark.jp','homemate-research.com','zehitomo.com','baseconnect.in',
+])
+
+function extractHost(url: string): string {
+  const m = url.match(/^https?:\/\/([^/?#]+)/)
+  return m ? m[1].replace(/^www\./, '') : ''
+}
+
 export async function runSerperSearch(params: {
   keywords: string[]
   area: string
@@ -181,7 +199,8 @@ export async function runSerperSearch(params: {
   }
 
   const CONCURRENCY = 20
-  const seen = new Set<string>()
+  const seenUrls = new Set<string>()
+  const seenHosts = new Set<string>()
   const rawResults: SerperResultItem[] = []
   let hasApiError: { status: number; text: string } | null = null
 
@@ -210,8 +229,13 @@ export async function runSerperSearch(params: {
       if ('error' in r && r.error) { hasApiError = r.error; break }
       for (const item of (r as { items: SerperResultItem[] }).items ?? []) {
         if (!item.link) continue
-        if (seen.has(item.link)) continue
-        seen.add(item.link)
+        if (seenUrls.has(item.link)) continue
+        const host = extractHost(item.link)
+        if (!host) continue
+        if (SKIP_DOMAINS.has(host) || [...SKIP_DOMAINS].some(d => host.endsWith('.' + d))) continue
+        if (seenHosts.has(host)) continue
+        seenUrls.add(item.link)
+        seenHosts.add(host)
         rawResults.push(item)
       }
     }

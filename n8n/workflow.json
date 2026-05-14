@@ -161,7 +161,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// CSEレスポンスを企業データに整形\nconst p = $('L-01: 検索パラメータ設定').item.json;\nconst items = $input.all();\n\nconst SKIP_DOMAINS = [\n  'jalan.net','tabelog.com','hotpepper.jp','ekiten.jp','townpage.ntt.co.jp',\n  'yelp.com','google.com','facebook.com','instagram.com','twitter.com','x.com',\n  'youtube.com','wikipedia.org','recruit.co.jp','indeed.com','linkedin.com',\n  'rakuten.co.jp','amazon.co.jp','wantedly.com','yahoo.co.jp',\n  'beauty.hotpepper.jp','minimo.io','navitime.co.jp','mapion.co.jp',\n  'retty.me','gurunavi.com','gnavi.co.jp','yelp.co.jp', 'karadarefre.jp', 'judo-ch.jp', 'body-care.expert', 'epark.jp', 'homemate-research.com', 'navitime.jp', 'iphone.jorudan.co.jp',\n  'hairbook.jp', 'riyou.jp', 'bestsalonreport.jp', 'beauty-park.jp', 'minimodel.jp',\n  'cuts.jp', 'hairsalon-map.com', '9483.jp', 'styledesigner.net', 'palanjp.com',\n  'kotomise.jp', 'repicolle.jp', 'jhdac.org', 'kiyose.or.jp', 'katusika-e-toko.com',\n  'hair.socie.jp', 'seahorsejp.com', 'web-zest.co.jp', 'people-brand.com',\n  'higasiyamatotida.wixsite.com',\n  'beautysalon.jp-book.store',\n  'zehitomo.com',\n  'its-mo.com',\n  'baseconnect.in',\n  'aderans.co.jp',\n  'beauty.mirai-agent.jp',\n  'kinujo.jp',\n  'am-shuuemura.jp',\n  'el.e-shops.jp',\n  'beautysalon.potatoo.jp',\n  'hair-land.jp',\n  'pathee.com',\n  'iryou.teikyouseido.mhlw.go.jp',\n  'modshair.co.jp',\n  'salon.tbmg.jp',\n];\n\nfunction extractHost(url) {\n  const m = url.match(/^https?:\\/\\/([^/?#]+)/);\n  return m ? m[1].replace(/^www\\./, '') : '';\n}\n\nconst SALON_KEYWORDS = ['美容室', 'ヘアサロン', '美容院', 'サロン', 'hair', 'Hair', 'HAIR'];\n\nfunction cleanCompanyName(title) {\n  if (!title) return title;\n  const segments = title.split(/[|–—｜]|-(?=[^-])/)\n    .map(s => s.trim())\n    .filter(s => s.length > 0);\n  if (segments.length <= 1) return title.trim();\n\n  // 最長セグメントが5文字以下なら元のtitleをそのまま返す\n  const maxLen = Math.max(...segments.map(s => s.length));\n  if (maxLen <= 5) return title.trim();\n\n  // 美容室キーワードを含むセグメントを優先\n  const salonSegment = segments.find(s =>\n    SALON_KEYWORDS.some(kw => s.includes(kw))\n  );\n  if (salonSegment) return salonSegment;\n\n  // なければ最も長いセグメントを返す\n  return segments.reduce((a, b) => a.length >= b.length ? a : b);\n}\n\nreturn items.map(({ json: item }) => {\n  const link = item.link || '';\n  let skipItem = !link;\n  if (link) {\n    const host = extractHost(link);\n    skipItem = !host || SKIP_DOMAINS.some(d => host === d || host.endsWith('.' + d));\n  }\n\n  return { json: {\n    companyName: cleanCompanyName(item.title || ''),\n    companyUrl:  link,\n    phone:       '',\n    address:     '',\n    industry:    p.industry,\n    area:        p.area,\n    spreadsheetId: p.spreadsheetId || '',\n    projectId:   p.projectId || '',\n    runId:       p.runId || '',\n    keyword:     item.keyword || '',\n    skipItem,\n  }};\n});\n"
+        "jsCode": "// CSEレスポンスを企業データに整形（ホストレベルdedup込み）\nconst p = $('L-01: 検索パラメータ設定').item.json;\nconst items = $input.all();\n\nconst SKIP_DOMAINS = [\n  // ポータル・グルメ・地図\n  'jalan.net','tabelog.com','hotpepper.jp','ekiten.jp','townpage.ntt.co.jp',\n  'navitime.co.jp','navitime.jp','mapion.co.jp','its-mo.com','iphone.jorudan.co.jp',\n  'yelp.com','yelp.co.jp','retty.me','gurunavi.com','gnavi.co.jp','r.gnavi.co.jp',\n  // SNS・プラットフォーム\n  'google.com','facebook.com','instagram.com','twitter.com','x.com',\n  'youtube.com','wikipedia.org','linkedin.com','tiktok.com','pinterest.com',\n  'maps.apple.com','maps.google.com',\n  // EC・求人\n  'recruit.co.jp','indeed.com','wantedly.com','yahoo.co.jp',\n  'rakuten.co.jp','amazon.co.jp',\n  // 美容・予約ポータル\n  'beauty.hotpepper.jp','minimo.io','hairbook.jp','riyou.jp',\n  'bestsalonreport.jp','beauty-park.jp','minimodel.jp','cuts.jp',\n  'hairsalon-map.com','9483.jp','styledesigner.net','kotomise.jp',\n  'repicolle.jp','hair.socie.jp','beautysalon.jp-book.store','beautysalon.potatoo.jp',\n  // 医療・整骨ポータル\n  'epark.jp','homemate-research.com','iryou.teikyouseido.mhlw.go.jp',\n  'jhdac.org','kiyose.or.jp','katusika-e-toko.com','judo-ch.jp',\n  'body-care.expert','karadarefre.jp',\n  // その他ポータル・アグリゲータ\n  'zehitomo.com','baseconnect.in','pathee.com','hair-land.jp',\n  'seahorsejp.com','web-zest.co.jp','people-brand.com',\n  'palanjp.com','beauty.mirai-agent.jp','aderans.co.jp',\n  'kinujo.jp','am-shuuemura.jp','el.e-shops.jp','modshair.co.jp',\n  'salon.tbmg.jp','higasiyamatotida.wixsite.com',\n];\n\nfunction extractHost(url) {\n  const m = url.match(/^https?:\\/\\/([^/?#]+)/);\n  return m ? m[1].replace(/^www\\./, '') : '';\n}\n\n// ホストレベルdedup: 同じドメインは1件のみ（最初に出た結果を採用）\nconst seenHosts = new Set();\n\nreturn items.reduce((acc, { json: item }) => {\n  const link = item.link || '';\n  if (!link) return acc;\n\n  const host = extractHost(link);\n  if (!host) return acc;\n  if (SKIP_DOMAINS.some(d => host === d || host.endsWith('.' + d))) return acc;\n  if (seenHosts.has(host)) return acc;\n  seenHosts.add(host);\n\n  // 会社名: パイプ/ダッシュで区切られた場合は最も意味のある部分を使用\n  let name = item.title || '';\n  const segments = name.split(/[|–—｜]|-(?=[^-])/).map(s => s.trim()).filter(s => s.length > 0);\n  if (segments.length > 1) {\n    const maxLen = Math.max(...segments.map(s => s.length));\n    if (maxLen > 5) {\n      name = segments.reduce((a, b) => a.length >= b.length ? a : b);\n    }\n  }\n\n  acc.push({ json: {\n    companyName: name,\n    companyUrl:  link,\n    phone:       '',\n    address:     '',\n    industry:    p.industry,\n    area:        p.area,\n    spreadsheetId: p.spreadsheetId || '',\n    projectId:   p.projectId || '',\n    runId:       p.runId || '',\n    keyword:     item.keyword || '',\n    skipItem:    false,\n  }});\n  return acc;\n}, []);\n"
       },
       "id": "map-company-data",
       "name": "企業データを整形",
@@ -174,7 +174,7 @@
     },
     {
       "parameters": {
-        "jsCode": "\n// L-05: 重複判定 - 全アイテム処理\nconst items = $input.all();\nreturn items.map(({ json: c }) => ({\n  json: { ...c, isDuplicate: false, normalizedHpUrl: c.companyUrl || '', existingFormUrlsArray: [] }\n}));\n"
+        "jsCode": "// L-05: 重複判定（ホストレベルdedupは企業データを整形で実施済み）\n// ここでは全件通過（DBレベルでの重複除去はcomplete APIが担当）\nconst items = $input.all();\nreturn items.map(({ json: c }) => ({\n  json: { ...c, isDuplicate: false }\n}));\n"
       },
       "id": "duplicate-check",
       "name": "L-05: 重複判定",
@@ -236,7 +236,7 @@
             {
               "id": "final-form",
               "name": "フォームURL",
-              "value": "={{ $json.formUrl }}",
+              "value": "={{ $json.formUrl || '' }}",
               "type": "string"
             },
             {
@@ -266,7 +266,7 @@
             {
               "id": "final-type",
               "name": "フォーム種別",
-              "value": "={{ $json.message?.type || 'inquiry' }}",
+              "value": "={{ $json.formTypeHint || 'unknown' }}",
               "type": "string"
             },
             {
@@ -376,46 +376,6 @@
       }
     },
     {
-      "id": "final-filter",
-      "name": "フォームあり？",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2,
-      "position": [
-        2180,
-        240
-      ],
-      "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": false,
-            "leftValue": "",
-            "typeValidation": "strict"
-          },
-          "conditions": [
-            {
-              "id": "has-form",
-              "leftValue": "={{ $json.formUrl }}",
-              "rightValue": "",
-              "operator": {
-                "type": "string",
-                "operation": "notEquals"
-              }
-            },
-            {
-              "id": "not-empty",
-              "leftValue": "={{ $json._empty }}",
-              "rightValue": true,
-              "operator": {
-                "type": "boolean",
-                "operation": "notEquals"
-              }
-            }
-          ],
-          "combinator": "and"
-        }
-      }
-    },
-    {
       "id": "collect-urls",
       "name": "URL収集",
       "type": "n8n-nodes-base.code",
@@ -440,7 +400,7 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "// スクレイプAPI結果を展開\nconst allInput = $input.all();\nif (!allInput.length) return [{ json: { _empty: true } }];\n\nconst item = allInput[0].json;\nconst results = item.results || [];\n\nif (!results.length) return [{ json: { _empty: true } }];\n\n// URL収集ノードから元の企業情報（会社名等）を取得\nlet companies = [];\ntry {\n  companies = $('URL収集').item.json.companies || [];\n} catch(e) {}\n\n// URLをキーにして会社名を引く\nconst companyMap = {};\nfor (const c of companies) {\n  if (c.companyUrl) companyMap[c.companyUrl] = c;\n}\n\nreturn results.map(r => {\n  const origUrl = r.url || r.baseUrl || '';\n  const orig = companyMap[origUrl] || {};\n  return { json: {\n    companyUrl: origUrl,\n    companyName: orig.companyName || r.companyName || '',\n    keyword: orig.keyword || '',\n    formUrl: r.formUrl || null,\n    email: r.email || null,\n    phone: r.phone || null,\n    address: r.address || null,\n    hasContactLink: r.hasContactLink || false,\n    contactLinks: r.contactLinks || [],\n    formPageTitle: r.formPageTitle || '',\n    formTypeHint: r.formTypeHint || 'unknown',\n    error: r.error || null,\n  } };\n});\n"
+        "jsCode": "// スクレイプAPI結果を展開\nconst allInput = $input.all();\nif (!allInput.length) return [];\n\nconst item = allInput[0].json;\nconst results = item.results || [];\n\nif (!results.length) return [];\n\n// URL収集ノードから元の企業情報（会社名等）を取得\nlet companies = [];\ntry {\n  companies = $('URL収集').item.json.companies || [];\n} catch(e) {}\n\n// URLをキーにして会社名を引く\nconst companyMap = {};\nfor (const c of companies) {\n  if (c.companyUrl) companyMap[c.companyUrl] = c;\n}\n\nreturn results\n  .filter(r => r.url || r.baseUrl)\n  .map(r => {\n    const origUrl = r.url || r.baseUrl || '';\n    const orig = companyMap[origUrl] || {};\n    return { json: {\n      companyUrl: origUrl,\n      companyName: orig.companyName || r.companyName || '',\n      keyword: orig.keyword || '',\n      formUrl: r.formUrl || null,\n      email: r.email || null,\n      phone: r.phone || null,\n      address: r.address || null,\n      hasContactLink: r.hasContactLink || false,\n      contactLinks: r.contactLinks || [],\n      formPageTitle: r.formPageTitle || '',\n      formTypeHint: r.formTypeHint || 'unknown',\n      error: r.error || null,\n    } };\n  });"
       }
     },
     {
@@ -458,7 +418,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ status: $json.status, companies: $json.companies }) }}",
+        "jsonBody": "={{ JSON.stringify({ status: $json.status, companies: $json.companies, tokensInput: 0, tokensOutput: 0, model: 'gpt-4o-mini', results: { queryCount: $('URL収集').item.json.urlItems?.length ?? 0 } }) }}",
         "options": {
           "timeout": 600000
         }
@@ -485,19 +445,6 @@
         2940,
         180
       ]
-    },
-    {
-      "id": "merge-all-results",
-      "name": "全結果マージ",
-      "type": "n8n-nodes-base.merge",
-      "typeVersion": 3,
-      "position": [
-        2820,
-        300
-      ],
-      "parameters": {
-        "mode": "append"
-      }
     },
     {
       "id": "search-provider-branch",
@@ -685,35 +632,6 @@
         ]
       ]
     },
-    "結果展開・整形": {
-      "main": [
-        [
-          {
-            "node": "フォームあり？",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "フォームあり？": {
-      "main": [
-        [
-          {
-            "node": "全結果マージ",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "全結果マージ",
-            "type": "main",
-            "index": 1
-          }
-        ]
-      ]
-    },
     "URL収集": {
       "main": [
         [
@@ -747,17 +665,6 @@
         ]
       ]
     },
-    "全結果マージ": {
-      "main": [
-        [
-          {
-            "node": "最終データ整形",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "検索プロバイダー分岐": {
       "main": [
         [
@@ -781,6 +688,17 @@
         [
           {
             "node": "検索結果を分割",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "結果展開・整形": {
+      "main": [
+        [
+          {
+            "node": "最終データ整形",
             "type": "main",
             "index": 0
           }

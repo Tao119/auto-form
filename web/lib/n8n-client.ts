@@ -16,7 +16,7 @@ export async function triggerWorkflow(params: ExecuteParams): Promise<{ executio
   const webhookUrl = `${BASE_URL}/webhook/${WEBHOOK_PATH}`
   const res = await fetch(webhookUrl, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
     body: JSON.stringify(params),
     signal: AbortSignal.timeout(15000),
   })

@@ -119,7 +119,7 @@ export default function ExecutePanel() {
 
   const actualIndustry = industry
   const isRunning = status === 'running' || status === 'queued'
-  const canExecute = !isRunning && !!actualIndustry && !!selectedProjectId && !!areaInput && areaValid !== false
+  const canExecute = !isRunning && !!actualIndustry && !!selectedProjectId && !!areaInput && areaValid !== false && !keywordsLoading
 
   // Restore persisted settings on first mount
   useEffect(() => {
@@ -760,6 +760,8 @@ export default function ExecutePanel() {
           >
             {isRunning ? (
               <><Loader2 className="w-4 h-4 animate-spin" /> {status === 'queued' ? '待機中...' : '実行中...'}</>
+            ) : keywordsLoading ? (
+              <><Loader2 className="w-4 h-4 animate-spin" /> キーワード生成中...</>
             ) : (
               <><Play className="w-4 h-4" />
                 {selectedAreas.length > 1

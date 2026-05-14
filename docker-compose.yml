@@ -27,7 +27,7 @@ services:
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
       # Callback URL so n8n can notify the web service on completion
       # host.docker.internal:3003 = Next.js dev server running on host machine
-      - WEB_CALLBACK_URL=http://host.docker.internal:3003
+      - WEB_CALLBACK_URL=https://web-liard-iota-37.vercel.app
       # Save execution data for debugging
       - EXECUTIONS_DATA_SAVE_ON_SUCCESS=all
       - EXECUTIONS_DATA_SAVE_ON_ERROR=all
@@ -36,6 +36,8 @@ services:
       - N8N_RUNNERS_ENABLED=false
       # HTTP Request node timeout (default 10s is too short for bulk search)
       - HTTP_TIMEOUT_MS=600000
+      # Expose n8n via tunnel so Vercel can reach it
+      - N8N_TUNNEL_ENABLE=true
     env_file:
       - .env
     volumes:
